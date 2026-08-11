@@ -1,0 +1,19 @@
+{
+  "name": "gemini-adk-chat",
+  "version": "1.0.0",
+  "description": "State-of-the-art Gemini AI Web Chat powered by Google ADK and GenAI SDK",
+  "main": "server.js",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "dependencies": {
+    "@google/adk": "^1.6.0",
+    "@google/genai": "^2.16.0",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "multer": "^1.4.5-lts.1"
+  }
+}
