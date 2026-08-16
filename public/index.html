@@ -134,6 +134,12 @@
         </div>
 
         <div class="header-right">
+          <button class="btn-icon" id="open-login-btn" title="Login to Parse Server" style="width: auto; padding: 0 12px; gap: 6px; font-size: 0.85rem; border-radius: 8px;">
+            <i class="fa-solid fa-user-lock"></i> <span id="auth-status-text">Parse Login</span>
+          </button>
+          <button class="btn-icon" id="toggle-flow-log-btn" title="Toggle Agent Execution Flow Log">
+            <i class="fa-solid fa-timeline"></i>
+          </button>
           <button class="btn-icon" id="export-chat-btn" title="Export Conversation">
             <i class="fa-solid fa-download"></i>
           </button>
@@ -224,6 +230,20 @@
 
   </div>
 
+  <!-- AGENT EXECUTION FLOW LOG DRAWER -->
+  <aside class="flow-log-drawer hidden" id="flow-log-drawer">
+    <div class="drawer-header">
+      <h3><i class="fa-solid fa-timeline"></i> Agent Execution Flow Log</h3>
+      <button class="btn-icon" id="close-flow-log-btn"><i class="fa-solid fa-xmark"></i></button>
+    </div>
+    <div class="drawer-body" id="flow-log-content">
+      <div class="flow-empty-msg">
+        <i class="fa-solid fa-network-wired"></i>
+        <p>No execution flow trace yet. Ask a database or tool question to see live steps.</p>
+      </div>
+    </div>
+  </aside>
+
   <!-- FILE PREVIEW MODAL -->
   <div class="modal-overlay hidden" id="file-modal">
     <div class="modal-card" style="max-width: 720px;">
@@ -238,6 +258,47 @@
 
       <div class="modal-footer">
         <a id="download-file-link" class="btn btn-primary" download target="_blank"><i class="fa-solid fa-download"></i> Download File</a>
+      </div>
+    </div>
+  </div>
+
+  <!-- PARSE LOGIN MODAL -->
+  <div class="modal-overlay hidden" id="login-modal">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3><i class="fa-solid fa-user-shield"></i> Parse Server User Login</h3>
+        <button class="btn-icon" id="close-login-modal-btn"><i class="fa-solid fa-xmark"></i></button>
+      </div>
+
+      <div class="modal-body">
+        <p style="font-size: 0.85rem; color: var(--text-dim); margin-bottom: 16px;">
+          Log in with your Parse database user credentials to enable live user queries on your behalf.
+        </p>
+
+        <form id="parse-login-form">
+          <div class="form-group">
+            <label for="parse-username-input">Username / Email</label>
+            <div class="input-with-icon">
+              <i class="fa-solid fa-user"></i>
+              <input type="text" id="parse-username-input" placeholder="Enter username or email" required>
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label for="parse-password-input">Password</label>
+            <div class="input-with-icon">
+              <i class="fa-solid fa-lock"></i>
+              <input type="password" id="parse-password-input" placeholder="Enter password" required>
+            </div>
+          </div>
+
+          <div id="login-error-msg" style="color: #ef4444; font-size: 0.85rem; display: none; margin-top: 8px;"></div>
+        </form>
+      </div>
+
+      <div class="modal-footer">
+        <button class="btn btn-secondary" id="logout-parse-btn" style="display: none;">Logout</button>
+        <button class="btn btn-primary" id="submit-login-btn"><i class="fa-solid fa-right-to-bracket"></i> Login to Parse</button>
       </div>
     </div>
   </div>
@@ -265,11 +326,11 @@
         <div class="form-group">
           <label for="default-model-select">Default Model</label>
           <select id="default-model-select" class="custom-select">
-            <option value="qwen3">Ollama: qwen3 (Local)</option>
             <option value="gemini-3.6-flash">Gemini 3.6 Flash (Recommended)</option>
-            <option value="gemini-3.5-flash">Gemini 3.5 Flash (Fast)</option>
-            <option value="gemini-3.1-pro-preview">Gemini 3.1 Pro (Reasoning)</option>
-            <option value="gemini-2.5-pro">Gemini 2.5 Pro</option>
+            <option value="gemini-flash-latest">Gemini Flash (Latest)</option>
+            <option value="gemini-3.5-flash">Gemini 3.5 Flash</option>
+            <option value="gemini-pro-latest">Gemini Pro (Deep Reasoning)</option>
+            <option value="qwen3">Ollama: qwen3 (Local)</option>
           </select>
         </div>
 

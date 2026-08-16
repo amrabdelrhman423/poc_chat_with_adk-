@@ -6,6 +6,7 @@ import { fileURLToPath } from 'url';
 import { MODEL_CATALOG, streamChatResponse, generateImageWithImagen } from './src/geminiService.js';
 import { getOllamaModels, streamOllamaChatResponse } from './src/ollamaService.js';
 import { executeListFiles, executeReadFile, WORKSPACE_DIR } from './src/agentTools.js';
+import { loginParseUser, verifyParseSessionToken } from './src/parseService.js';
 
 dotenv.config();
 
@@ -23,6 +24,30 @@ app.use(express.static(path.join(__dirname, 'public'), { etag: false, lastModifi
 app.use('/workspace', express.static(WORKSPACE_DIR));
 
 // API Routes
+
+// Parse Authentication Endpoints
+app.post('/api/auth/login', async (req, res) => {
+  const { username, password } = req.body;
+  try {
+    const result = await loginParseUser({ username, password });
+    res.json(result);
+  } catch (err) {
+    res.status(401).json({ success: false, error: err.message || 'Parse authentication failed' });
+  }
+});
+
+app.get('/api/auth/me', async (req, res) => {
+  const sessionToken = req.headers['x-parse-session-token'] || req.query.sessionToken;
+  if (!sessionToken) {
+    return res.status(401).json({ success: false, error: 'No session token provided.' });
+  }
+  try {
+    const result = await verifyParseSessionToken(sessionToken);
+    res.json(result);
+  } catch (err) {
+    res.status(401).json({ success: false, error: err.message });
+  }
+});
 
 // 1. Get supported models (Both Google Gemini Cloud and Ollama Local Models)
 app.get('/api/models', async (req, res) => {
@@ -52,7 +77,7 @@ app.get('/api/health', async (req, res) => {
 
 // 3. Streaming Chat Endpoint (Handles both Gemini and Ollama Qwen with Tool Calling)
 app.post('/api/chat', async (req, res) => {
-  const { apiKey, model = 'qwen3', provider, messages, systemInstruction, temperature, topP, chatId } = req.body;
+  const { apiKey, model = 'qwen3', provider, messages, systemInstruction, temperature, topP, chatId, sessionToken } = req.body;
 
   if (!messages || !Array.isArray(messages) || messages.length === 0) {
     return res.status(400).json({ error: 'Messages array is required and cannot be empty.' });
@@ -64,7 +89,8 @@ app.post('/api/chat', async (req, res) => {
   res.setHeader('Connection', 'keep-alive');
   res.setHeader('X-Accel-Buffering', 'no');
 
-  const isOllama = provider === 'ollama' || model.toLowerCase().includes('qwen') || model.toLowerCase().includes('ollama') || model.toLowerCase().includes('llama');
+  const safeModel = (model || 'gemini-3.6-flash').toString();
+  const isOllama = provider === 'ollama' || safeModel.toLowerCase().includes('qwen') || safeModel.toLowerCase().includes('ollama') || safeModel.toLowerCase().includes('llama');
 
   // Use chatId as sessionId for ADK session management (default to 'default' if not provided)
   const sessionId = chatId || 'default';
@@ -72,14 +98,14 @@ app.post('/api/chat', async (req, res) => {
   try {
     if (isOllama) {
       await streamOllamaChatResponse(
-        { model, messages, systemInstruction, temperature, sessionId },
+        { model, messages, systemInstruction, temperature, sessionId, sessionToken },
         (chunkText) => {
           res.write(`data: ${JSON.stringify({ text: chunkText })}\n\n`);
         }
       );
     } else {
       await streamChatResponse(
-        { apiKey, model, messages, systemInstruction, temperature, topP, sessionId },
+        { apiKey, model, messages, systemInstruction, temperature, topP, sessionId, sessionToken },
         (chunkText) => {
           res.write(`data: ${JSON.stringify({ text: chunkText })}\n\n`);
         }

@@ -66,12 +66,12 @@ export async function getOllamaModels() {
  * @param {string} params.sessionId - Unique chat ID (used as ADK session ID)
  * @param {Function} onChunk - SSE callback to stream text to the client
  */
-export async function streamOllamaChatResponse({ model = 'qwen3:latest', messages = [], systemInstruction = '', temperature = 0.7, sessionId = 'default' }, onChunk) {
+export async function streamOllamaChatResponse({ model = 'qwen3:latest', messages = [], systemInstruction = '', temperature = 0.7, sessionId = 'default', sessionToken = null }, onChunk) {
   const { createOllamaLlmAgent, createRunner, ensureSession } = await import('./adkAgent.js');
   const { getFunctionCalls, getFunctionResponses } = await import('@google/adk');
 
   // Build agent + runner using the OllamaLlm ADK adapter
-  const agent = createOllamaLlmAgent({ model, instruction: systemInstruction });
+  const agent = createOllamaLlmAgent({ model, instruction: systemInstruction, sessionToken });
   const runner = createRunner(agent);
 
   const userId = 'ollama_user';
@@ -87,6 +87,9 @@ export async function streamOllamaChatResponse({ model = 'qwen3:latest', message
   if (lastUserMsg.text && lastUserMsg.text.trim()) {
     parts.push({ text: lastUserMsg.text });
   }
+  if (parts.length === 0) {
+    parts.push({ text: lastUserMsg.text || 'Hello' });
+  }
   const newMessage = { role: 'user', parts };
 
   // Notify the client that we're thinking (Ollama is non-streaming per request)
@@ -95,42 +98,87 @@ export async function streamOllamaChatResponse({ model = 'qwen3:latest', message
   // Run the ADK agent — yields typed Event objects
   const eventStream = runner.runAsync({ userId, sessionId, newMessage });
 
-  for await (const event of eventStream) {
-    const eventType = event.eventType;
+  let stepIndex = 0;
+  let hasEmittedText = false;
 
-    // Stream text content from model response events
-    if (event.content && event.content.parts) {
-      for (const part of event.content.parts) {
-        if (part.text) {
-          onChunk(part.text);
+  try {
+    for await (const event of eventStream) {
+      const eventType = event.eventType;
+
+      // Stream text content from model response events
+      if (event.content && event.content.parts) {
+        for (const part of event.content.parts) {
+          if (part.text) {
+            hasEmittedText = true;
+            onChunk(part.text);
+          }
         }
       }
-    }
 
-    // Notify when the agent invokes a tool
-    if (eventType === 'tool_call') {
-      const calls = getFunctionCalls(event);
-      for (const call of calls) {
-        onChunk(`\n\n> 🔧 **Calling Tool: \`${call.name}\`**\n`);
+      // Notify when the agent invokes a tool (tool_call event)
+      if (eventType === 'tool_call') {
+        const calls = getFunctionCalls(event);
+        for (const call of calls) {
+          stepIndex++;
+
+          let formattedArgsStr = '';
+          if (call.args && Object.keys(call.args).length > 0) {
+            const cleanedArgs = { ...call.args };
+            if (typeof cleanedArgs.where === 'string' && cleanedArgs.where.trim()) {
+              try { cleanedArgs.where = JSON.parse(cleanedArgs.where); } catch (e) {}
+            }
+            if (typeof cleanedArgs.pipeline === 'string' && cleanedArgs.pipeline.trim()) {
+              try { cleanedArgs.pipeline = JSON.parse(cleanedArgs.pipeline); } catch (e) {}
+            }
+            formattedArgsStr = JSON.stringify(cleanedArgs, null, 2);
+          }
+
+          let stepMarkdown = `\n\n> 🔍 **Step ${stepIndex}: Executing Tool \`${call.name}\`**\n`;
+          if (formattedArgsStr) {
+            stepMarkdown += `> 📥 **Parameters:**\n\`\`\`json\n${formattedArgsStr}\n\`\`\`\n`;
+          } else {
+            stepMarkdown += `> 📥 **Parameters:** *(None)*\n`;
+          }
+
+          onChunk(stepMarkdown);
+        }
       }
-    }
 
-    // Notify when a tool result is returned
-    if (eventType === 'tool_result') {
-      const responses = getFunctionResponses(event);
-      for (const resp of responses) {
-        const result = resp.response;
-        if (result) {
-          if (result.status === 'success' && result.filename) {
-            onChunk(`> ✅ **File Saved**: \`workspace/${result.filename}\` (${result.bytesWritten || 0} bytes)\n\n`);
-          } else if (result.status === 'success' && result.message) {
-            onChunk(`> ✅ **Tool Result**: ${result.message}\n\n`);
-          } else if (result.status === 'error') {
-            onChunk(`> ❌ **Tool Error**: ${result.message}\n\n`);
+      // Notify when a tool result is returned (tool_result event)
+      if (eventType === 'tool_result') {
+        const responses = getFunctionResponses(event);
+        for (const resp of responses) {
+          const result = resp.response;
+          if (result) {
+            if (result.status === 'success') {
+              const summary = result.message || `Query completed for ${result.className || 'workspace'}.`;
+              let extraInfo = '';
+              if (result.count !== undefined) {
+                extraInfo = ` — **Total Count:** \`${result.count}\``;
+              } else if (result.results && Array.isArray(result.results)) {
+                extraInfo = ` — **Returned:** \`${result.results.length}\` record(s)`;
+              } else if (result.filename) {
+                extraInfo = ` — **File Saved:** \`workspace/${result.filename}\``;
+              }
+              onChunk(`> ✅ **Step ${stepIndex} Output:** ${summary}${extraInfo}\n\n`);
+            } else if (result.status === 'error') {
+              onChunk(`> ❌ **Step ${stepIndex} Error:** ${result.message}\n\n`);
+            }
           }
         }
       }
     }
+
+    if (!hasEmittedText && stepIndex > 0) {
+      onChunk('\n\n*(The live database service is currently offline. Please let me know what general information or guidance you need.)*');
+    }
+  } catch (streamErr) {
+    console.error('Error during Ollama ADK execution:', streamErr);
+    const { sessionService } = await import('./adkAgent.js');
+    try {
+      await sessionService.deleteSession({ appName: 'gemini_adk_chat', userId, sessionId });
+    } catch (e) {}
+    onChunk(`\n\n⚠️ **Notice:** An issue occurred during processing (${streamErr.message}). Session state was reset — please try asking your question again.`);
   }
 }
 

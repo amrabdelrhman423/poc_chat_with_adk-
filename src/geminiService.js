@@ -12,25 +12,32 @@ dotenv.config();
 // Available models metadata for the client UI
 export const MODEL_CATALOG = [
   {
-    id: 'gemini-2.5-flash',
-    name: 'Gemini 2.5 Flash',
+    id: 'gemini-3.6-flash',
+    name: 'Gemini 3.6 Flash',
     tag: 'Recommended',
-    description: 'Fastest & smartest model for everyday coding, reasoning, and multimodal chat with file tools.',
+    description: 'Latest & smartest flagship model for coding, reasoning, and multimodal agent tools.',
     category: 'general'
   },
   {
-    id: 'gemini-2.5-pro',
-    name: 'Gemini 2.5 Pro',
-    tag: 'Pro',
-    description: 'Versatile model with exceptional multimodal and long-context capabilities.',
-    category: 'pro'
+    id: 'gemini-flash-latest',
+    name: 'Gemini Flash (Latest)',
+    tag: 'Fast & Reliable',
+    description: 'Always points to the latest stable Flash model for general chat and tool calls.',
+    category: 'general'
   },
   {
-    id: 'gemini-2.5-flash-lite',
-    name: 'Gemini 2.5 Flash Lite',
-    tag: 'Ultra-Fast',
-    description: 'Lightweight model optimized for speed and high throughput.',
+    id: 'gemini-3.5-flash',
+    name: 'Gemini 3.5 Flash',
+    tag: 'Balanced',
+    description: 'High-speed model optimized for low latency and high quality.',
     category: 'fast'
+  },
+  {
+    id: 'gemini-pro-latest',
+    name: 'Gemini Pro (Latest)',
+    tag: 'Pro Reasoning',
+    description: 'Advanced reasoning model with deep analysis and long-context capabilities.',
+    category: 'pro'
   },
   {
     id: 'imagen-4.0-generate-001',
@@ -60,6 +67,25 @@ function resolveApiKey(customApiKey) {
   return key;
 }
 
+const SUPPORTED_GEMINI_MODELS = new Set([
+  'gemini-3.6-flash',
+  'gemini-flash-latest',
+  'gemini-3.5-flash',
+  'gemini-pro-latest',
+  'gemini-3.5-flash-lite',
+  'gemini-2.5-flash',
+  'gemini-2.5-pro'
+]);
+
+export function sanitizeGeminiModel(modelId) {
+  if (!modelId || typeof modelId !== 'string') return 'gemini-3.6-flash';
+  const lower = modelId.toLowerCase().trim();
+  if (SUPPORTED_GEMINI_MODELS.has(lower)) return lower;
+  if (lower.includes('pro')) return 'gemini-pro-latest';
+  if (lower.includes('lite')) return 'gemini-3.5-flash-lite';
+  return 'gemini-3.6-flash';
+}
+
 /**
  * Streams chat responses using the ADK LlmAgent + Runner with FunctionTool support.
  * The Runner manages the full tool-call loop: LLM → tool execution → result → LLM.
@@ -74,13 +100,14 @@ function resolveApiKey(customApiKey) {
  * @param {Function} onChunk - Callback to stream text chunks to the client
  */
 export async function streamChatResponse(
-  { apiKey, model = 'gemini-2.5-flash', messages = [], systemInstruction = '', temperature = 0.7, sessionId = 'default' },
+  { apiKey, model = 'gemini-3.6-flash', messages = [], systemInstruction = '', temperature = 0.7, sessionId = 'default', sessionToken = null },
   onChunk
 ) {
   const key = resolveApiKey(apiKey);
+  const effectiveModel = sanitizeGeminiModel(model);
 
   // Build a fresh LlmAgent + Runner for this request
-  const agent = createLlmAgent({ apiKey: key, model, instruction: systemInstruction });
+  const agent = createLlmAgent({ apiKey: key, model: effectiveModel, instruction: systemInstruction, sessionToken });
   const runner = createRunner(agent);
 
   // Ensure a persistent session exists (keyed per chat)
@@ -114,6 +141,11 @@ export async function streamChatResponse(
     }
   }
 
+  // Fallback if parts is still empty
+  if (parts.length === 0) {
+    parts.push({ text: lastUserMsg.text || 'Hello' });
+  }
+
   const newMessage = { role: 'user', parts };
 
   // Run the ADK agent — this async generator yields typed Event objects
@@ -123,42 +155,87 @@ export async function streamChatResponse(
     newMessage
   });
 
-  for await (const event of eventStream) {
-    const eventType = event.eventType;
+  let stepIndex = 0;
+  let hasEmittedText = false;
 
-    // Stream text content parts from model response events
-    if (event.content && event.content.parts) {
-      for (const part of event.content.parts) {
-        if (part.text) {
-          onChunk(part.text);
+  try {
+    for await (const event of eventStream) {
+      const eventType = event.eventType;
+
+      // Stream text content parts from model response events
+      if (event.content && event.content.parts) {
+        for (const part of event.content.parts) {
+          if (part.text) {
+            hasEmittedText = true;
+            onChunk(part.text);
+          }
         }
       }
-    }
 
-    // Notify when the agent calls a tool (tool_call event: parts have functionCall)
-    if (eventType === 'tool_call') {
-      const calls = getFunctionCalls(event);
-      for (const call of calls) {
-        onChunk(`\n\n> 🔧 **Calling Tool: \`${call.name}\`**\n`);
+      // Notify when the agent calls a tool (tool_call event)
+      if (eventType === 'tool_call') {
+        const calls = getFunctionCalls(event);
+        for (const call of calls) {
+          stepIndex++;
+          
+          let formattedArgsStr = '';
+          if (call.args && Object.keys(call.args).length > 0) {
+            const cleanedArgs = { ...call.args };
+            if (typeof cleanedArgs.where === 'string' && cleanedArgs.where.trim()) {
+              try { cleanedArgs.where = JSON.parse(cleanedArgs.where); } catch (e) {}
+            }
+            if (typeof cleanedArgs.pipeline === 'string' && cleanedArgs.pipeline.trim()) {
+              try { cleanedArgs.pipeline = JSON.parse(cleanedArgs.pipeline); } catch (e) {}
+            }
+            formattedArgsStr = JSON.stringify(cleanedArgs, null, 2);
+          }
+
+          let stepMarkdown = `\n\n> 🔍 **Step ${stepIndex}: Executing Tool \`${call.name}\`**\n`;
+          if (formattedArgsStr) {
+            stepMarkdown += `> 📥 **Parameters:**\n\`\`\`json\n${formattedArgsStr}\n\`\`\`\n`;
+          } else {
+            stepMarkdown += `> 📥 **Parameters:** *(None)*\n`;
+          }
+
+          onChunk(stepMarkdown);
+        }
       }
-    }
 
-    // Notify when a tool result comes back (tool_result event: parts have functionResponse)
-    if (eventType === 'tool_result') {
-      const responses = getFunctionResponses(event);
-      for (const resp of responses) {
-        const result = resp.response;
-        if (result) {
-          if (result.status === 'success' && result.filename) {
-            onChunk(`> ✅ **File Saved**: \`workspace/${result.filename}\` (${result.bytesWritten || 0} bytes)\n\n`);
-          } else if (result.status === 'success' && result.message) {
-            onChunk(`> ✅ **Tool Result**: ${result.message}\n\n`);
-          } else if (result.status === 'error') {
-            onChunk(`> ❌ **Tool Error**: ${result.message}\n\n`);
+      // Notify when a tool result comes back (tool_result event)
+      if (eventType === 'tool_result') {
+        const responses = getFunctionResponses(event);
+        for (const resp of responses) {
+          const result = resp.response;
+          if (result) {
+            if (result.status === 'success') {
+              const summary = result.message || `Query completed for ${result.className || 'workspace'}.`;
+              let extraInfo = '';
+              if (result.count !== undefined) {
+                extraInfo = ` — **Total Count:** \`${result.count}\``;
+              } else if (result.results && Array.isArray(result.results)) {
+                extraInfo = ` — **Returned:** \`${result.results.length}\` record(s)`;
+              } else if (result.filename) {
+                extraInfo = ` — **File Saved:** \`workspace/${result.filename}\``;
+              }
+              onChunk(`> ✅ **Step ${stepIndex} Output:** ${summary}${extraInfo}\n\n`);
+            } else if (result.status === 'error') {
+              onChunk(`> ❌ **Step ${stepIndex} Error:** ${result.message}\n\n`);
+            }
           }
         }
       }
     }
+
+    if (!hasEmittedText && stepIndex > 0) {
+      onChunk('\n\n*(The live database service is currently offline. Please let me know what general information or guidance you need.)*');
+    }
+  } catch (streamErr) {
+    console.error('Error during Gemini ADK execution:', streamErr);
+    const { sessionService } = await import('./adkAgent.js');
+    try {
+      await sessionService.deleteSession({ appName: 'gemini_adk_chat', userId, sessionId });
+    } catch (e) {}
+    onChunk(`\n\n⚠️ **Notice:** An issue occurred during processing (${streamErr.message}). Session state was reset — please try asking your question again.`);
   }
 }
 

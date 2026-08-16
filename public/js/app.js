@@ -37,6 +37,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   let state = {
     settings: loadSettings(),
+    parseUser: loadParseUser(),
     geminiModels: [],
     ollamaModels: [],
     allModels: [],
@@ -68,6 +69,17 @@ document.addEventListener('DOMContentLoaded', () => {
     exportChatBtn: document.getElementById('export-chat-btn'),
     clearChatBtn: document.getElementById('clear-chat-btn'),
     
+    openLoginBtn: document.getElementById('open-login-btn'),
+    authStatusText: document.getElementById('auth-status-text'),
+    loginModal: document.getElementById('login-modal'),
+    closeLoginModalBtn: document.getElementById('close-login-modal-btn'),
+    parseLoginForm: document.getElementById('parse-login-form'),
+    parseUsernameInput: document.getElementById('parse-username-input'),
+    parsePasswordInput: document.getElementById('parse-password-input'),
+    submitLoginBtn: document.getElementById('submit-login-btn'),
+    logoutParseBtn: document.getElementById('logout-parse-btn'),
+    loginErrorMsg: document.getElementById('login-error-msg'),
+    
     chatMessages: document.getElementById('chat-messages'),
     welcomeScreen: document.getElementById('welcome-screen'),
     scrollBottomBtn: document.getElementById('scroll-bottom-btn'),
@@ -98,7 +110,11 @@ document.addEventListener('DOMContentLoaded', () => {
     toppValueDisplay: document.getElementById('topp-value-display'),
     saveSettingsBtn: document.getElementById('save-settings-btn'),
     resetSettingsBtn: document.getElementById('reset-settings-btn'),
-    toastContainer: document.getElementById('toast-container')
+    toastContainer: document.getElementById('toast-container'),
+    toggleFlowLogBtn: document.getElementById('toggle-flow-log-btn'),
+    flowLogDrawer: document.getElementById('flow-log-drawer'),
+    closeFlowLogBtn: document.getElementById('close-flow-log-btn'),
+    flowLogContent: document.getElementById('flow-log-content')
   };
 
   // Setup Marked Markdown Renderer with Highlight.js
@@ -147,6 +163,7 @@ document.addEventListener('DOMContentLoaded', () => {
       setActiveChat(state.chats[0].id);
     }
     
+    updateAuthUI();
     checkHealthStatus();
   }
 
@@ -466,6 +483,16 @@ document.addEventListener('DOMContentLoaded', () => {
     state.isStreaming = true;
     DOM.sendBtn.disabled = true;
 
+    // Reset Flow Log Drawer for this message
+    if (DOM.flowLogContent) {
+      DOM.flowLogContent.innerHTML = '';
+      const lastMsg = chat.messages[chat.messages.length - 1];
+      if (lastMsg) {
+        appendFlowCard('📥 1. User Question', lastMsg.text || '(Attachment)', 'Input');
+      }
+      appendFlowCard('🤖 2. Agent Initialization', `Model: ${chat.model || 'gemini-2.5-flash'}\nSession: ${chat.id}`, 'Agent');
+    }
+
     const isQwen = (chat.model || '').includes('qwen');
     const avatarIcon = isQwen ? 'fa-solid fa-brain' : 'fa-solid fa-wand-magic-sparkles';
     const avatarStyle = isQwen ? 'background: linear-gradient(135deg, #059669 0%, #10b981 100%);' : '';
@@ -485,6 +512,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const bubbleTextElem = botRow.querySelector('.bubble-text');
     let fullResponseText = '';
+    let seenSteps = new Set();
 
     try {
       const response = await fetch('/api/chat', {
@@ -498,7 +526,8 @@ document.addEventListener('DOMContentLoaded', () => {
           systemInstruction: chat.systemInstruction || state.settings.systemInstruction,
           temperature: parseFloat(state.settings.temperature),
           topP: parseFloat(state.settings.topP),
-          chatId: chat.id
+          chatId: chat.id,
+          sessionToken: state.parseUser ? state.parseUser.sessionToken : null
         })
       });
 
@@ -521,7 +550,10 @@ document.addEventListener('DOMContentLoaded', () => {
         for (const line of lines) {
           if (line.startsWith('data: ')) {
             const dataStr = line.replace(/^data:\s*/, '').trim();
-            if (dataStr === '[DONE]') break;
+            if (dataStr === '[DONE]') {
+              appendFlowCard('✨ 5. Flow Completed', 'Final answer response generation finished.', 'Complete');
+              break;
+            }
 
             try {
               const parsed = JSON.parse(dataStr);
@@ -532,6 +564,15 @@ document.addEventListener('DOMContentLoaded', () => {
                 fullResponseText += parsed.text;
                 bubbleTextElem.innerHTML = marked.parse(fullResponseText) + `<span class="typing-cursor"></span>`;
                 scrollToBottom();
+
+                // Live flow log tracing
+                if (parsed.text.includes('🔍 Step') && !seenSteps.has(parsed.text)) {
+                  seenSteps.add(parsed.text);
+                  appendFlowCard('⚙️ 3. Tool Invocation', parsed.text.trim(), 'Tool Call');
+                } else if ((parsed.text.includes('✅ Step') || parsed.text.includes('❌ Step')) && !seenSteps.has(parsed.text)) {
+                  seenSteps.add(parsed.text);
+                  appendFlowCard('📊 4. Database / Tool Output', parsed.text.trim(), 'Payload');
+                }
               }
             } catch (jsonErr) {
               console.warn('JSON parse error in chunk:', dataStr);
@@ -540,6 +581,9 @@ document.addEventListener('DOMContentLoaded', () => {
         }
       }
 
+      if (!fullResponseText || !fullResponseText.trim()) {
+        fullResponseText = "⚠️ *(The live database service is currently offline. Please let me know what general information or guidance you need.)*";
+      }
       bubbleTextElem.innerHTML = marked.parse(fullResponseText);
       
       const botMsg = { role: 'model', text: fullResponseText, timestamp: Date.now() };
@@ -665,6 +709,90 @@ document.addEventListener('DOMContentLoaded', () => {
   function clearPendingImages() {
     state.pendingImages = [];
     renderPendingImages();
+  }
+
+  // =========================================================================
+  // Parse User Authentication Management
+  // =========================================================================
+
+  function loadParseUser() {
+    const saved = localStorage.getItem('parse_user');
+    return saved ? JSON.parse(saved) : null;
+  }
+
+  function saveParseUser(user) {
+    state.parseUser = user;
+    if (user) {
+      localStorage.setItem('parse_user', JSON.stringify(user));
+    } else {
+      localStorage.removeItem('parse_user');
+    }
+    updateAuthUI();
+  }
+
+  function updateAuthUI() {
+    if (!DOM.authStatusText) return;
+    if (state.parseUser) {
+      const name = state.parseUser.fullname || state.parseUser.username || 'User';
+      DOM.authStatusText.innerHTML = `<i class="fa-solid fa-user-check" style="color:#10b981;"></i> ${escapeHTML(name)}`;
+      if (DOM.logoutParseBtn) DOM.logoutParseBtn.style.display = 'inline-block';
+      if (DOM.submitLoginBtn) DOM.submitLoginBtn.innerHTML = `<i class="fa-solid fa-check"></i> Logged In`;
+    } else {
+      DOM.authStatusText.innerHTML = `<i class="fa-solid fa-user-lock"></i> Parse Login`;
+      if (DOM.logoutParseBtn) DOM.logoutParseBtn.style.display = 'none';
+      if (DOM.submitLoginBtn) DOM.submitLoginBtn.innerHTML = `<i class="fa-solid fa-right-to-bracket"></i> Login to Parse`;
+    }
+  }
+
+  function openLoginModal() {
+    if (DOM.loginErrorMsg) DOM.loginErrorMsg.style.display = 'none';
+    if (DOM.loginModal) DOM.loginModal.classList.remove('hidden');
+  }
+
+  function closeLoginModal() {
+    if (DOM.loginModal) DOM.loginModal.classList.add('hidden');
+  }
+
+  async function handleParseLogin(e) {
+    if (e) e.preventDefault();
+    const username = DOM.parseUsernameInput.value.trim();
+    const password = DOM.parsePasswordInput.value.trim();
+    if (!username || !password) return;
+
+    if (DOM.loginErrorMsg) DOM.loginErrorMsg.style.display = 'none';
+
+    try {
+      const res = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password })
+      });
+      const data = await res.json();
+
+      if (data.success && data.user) {
+        saveParseUser(data.user);
+        closeLoginModal();
+        DOM.parseUsernameInput.value = '';
+        DOM.parsePasswordInput.value = '';
+        showToast(`Logged in successfully as ${data.user.username}`, 'success');
+      } else {
+        if (DOM.loginErrorMsg) {
+          DOM.loginErrorMsg.textContent = data.error || 'Authentication failed. Check your credentials.';
+          DOM.loginErrorMsg.style.display = 'block';
+        }
+      }
+    } catch (err) {
+      if (DOM.loginErrorMsg) {
+        DOM.loginErrorMsg.textContent = 'Connection failed: ' + err.message;
+        DOM.loginErrorMsg.style.display = 'block';
+      }
+    }
+  }
+
+  function handleParseLogout() {
+    saveParseUser(null);
+    closeLoginModal();
+    showToast('Logged out from Parse Server', 'info');
   }
 
   // =========================================================================
@@ -863,6 +991,23 @@ document.addEventListener('DOMContentLoaded', () => {
     });
     DOM.scrollBottomBtn.addEventListener('click', scrollToBottom);
 
+    if (DOM.toggleFlowLogBtn) {
+      DOM.toggleFlowLogBtn.addEventListener('click', () => {
+        if (DOM.flowLogDrawer) DOM.flowLogDrawer.classList.toggle('hidden');
+      });
+    }
+    if (DOM.closeFlowLogBtn) {
+      DOM.closeFlowLogBtn.addEventListener('click', () => {
+        if (DOM.flowLogDrawer) DOM.flowLogDrawer.classList.add('hidden');
+      });
+    }
+
+    if (DOM.openLoginBtn) DOM.openLoginBtn.addEventListener('click', openLoginModal);
+    if (DOM.closeLoginModalBtn) DOM.closeLoginModalBtn.addEventListener('click', closeLoginModal);
+    if (DOM.submitLoginBtn) DOM.submitLoginBtn.addEventListener('click', handleParseLogin);
+    if (DOM.parseLoginForm) DOM.parseLoginForm.addEventListener('submit', handleParseLogin);
+    if (DOM.logoutParseBtn) DOM.logoutParseBtn.addEventListener('click', handleParseLogout);
+
     DOM.closeFileModalBtn.addEventListener('click', () => DOM.fileModal.classList.add('hidden'));
 
     DOM.openSettingsBtn.addEventListener('click', openSettingsModal);
@@ -897,6 +1042,25 @@ document.addEventListener('DOMContentLoaded', () => {
         }
       }
     });
+  }
+
+  function appendFlowCard(title, bodyText, badgeText = 'Step') {
+    if (!DOM.flowLogContent) return;
+
+    const emptyMsg = DOM.flowLogContent.querySelector('.flow-empty-msg');
+    if (emptyMsg) emptyMsg.remove();
+
+    const card = document.createElement('div');
+    card.className = 'flow-card';
+    card.innerHTML = `
+      <div class="flow-card-header">
+        <span>${escapeHTML(title)}</span>
+        <span class="flow-card-badge">${escapeHTML(badgeText)}</span>
+      </div>
+      <div class="flow-card-body">${escapeHTML(bodyText)}</div>
+    `;
+    DOM.flowLogContent.appendChild(card);
+    DOM.flowLogContent.scrollTop = DOM.flowLogContent.scrollHeight;
   }
 
   function scrollToBottom() {
