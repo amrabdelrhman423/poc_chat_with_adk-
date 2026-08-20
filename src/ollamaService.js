@@ -66,16 +66,16 @@ export async function getOllamaModels() {
  * @param {string} params.sessionId - Unique chat ID (used as ADK session ID)
  * @param {Function} onChunk - SSE callback to stream text to the client
  */
-export async function streamOllamaChatResponse({ model = 'qwen3:latest', messages = [], systemInstruction = '', temperature = 0.7, sessionId = 'default', sessionToken = null }, onChunk) {
+export async function streamOllamaChatResponse({ model = 'qwen3:latest', messages = [], systemInstruction = '', temperature = 0.7, sessionId = 'default', sessionToken = null, userUid = null }, onChunk) {
   const { createOllamaLlmAgent, createRunner, ensureSession } = await import('./adkAgent.js');
   const { getFunctionCalls, getFunctionResponses } = await import('@google/adk');
 
   // Build agent + runner using the OllamaLlm ADK adapter
-  const agent = createOllamaLlmAgent({ model, instruction: systemInstruction, sessionToken });
+  const agent = createOllamaLlmAgent({ model, instruction: systemInstruction, sessionToken, userUid });
   const runner = createRunner(agent);
 
   const userId = 'ollama_user';
-  await ensureSession(userId, sessionId);
+  await ensureSession(userId, sessionId, userUid ? { user_uid: userUid } : {});
 
   // Use only the last user message as the new turn input
   const lastUserMsg = [...messages].reverse().find(m => m.role === 'user');
@@ -100,24 +100,23 @@ export async function streamOllamaChatResponse({ model = 'qwen3:latest', message
 
   let stepIndex = 0;
   let hasEmittedText = false;
+  let lastToolSummary = '';
 
   try {
     for await (const event of eventStream) {
-      const eventType = event.eventType;
-
-      // Stream text content from model response events
+      // 1. Stream text content from model response events
       if (event.content && event.content.parts) {
         for (const part of event.content.parts) {
-          if (part.text) {
+          if (part.text && part.text.trim()) {
             hasEmittedText = true;
             onChunk(part.text);
           }
         }
       }
 
-      // Notify when the agent invokes a tool (tool_call event)
-      if (eventType === 'tool_call') {
-        const calls = getFunctionCalls(event);
+      // 2. Detect and stream tool calls
+      const calls = getFunctionCalls(event);
+      if (calls && calls.length > 0) {
         for (const call of calls) {
           stepIndex++;
 
@@ -144,23 +143,41 @@ export async function streamOllamaChatResponse({ model = 'qwen3:latest', message
         }
       }
 
-      // Notify when a tool result is returned (tool_result event)
-      if (eventType === 'tool_result') {
-        const responses = getFunctionResponses(event);
+      // 3. Detect and stream tool responses
+      const responses = getFunctionResponses(event);
+      if (responses && responses.length > 0) {
         for (const resp of responses) {
           const result = resp.response;
           if (result) {
             if (result.status === 'success') {
-              const summary = result.message || `Query completed for ${result.className || 'workspace'}.`;
-              let extraInfo = '';
-              if (result.count !== undefined) {
-                extraInfo = ` — **Total Count:** \`${result.count}\``;
-              } else if (result.results && Array.isArray(result.results)) {
-                extraInfo = ` — **Returned:** \`${result.results.length}\` record(s)`;
+              let detailedSummary = result.message || `Query completed for ${result.className || 'workspace'}.`;
+              if (result.results && Array.isArray(result.results) && result.results.length > 0) {
+                const recordsList = result.results.map((r, i) => {
+                  const name = r.fullname || r.fullnameAr || r.nameEn || r.nameAr || r.detailsEn || r.objectId || `Record #${i+1}`;
+                  const details = [];
+                  if (r.title || r.positionAr || r.positionEn) details.push(`Title: ${r.title || r.positionAr || r.positionEn}`);
+                  if (r.specialtyDetails?.nameEn || r.specialtyDetails?.nameAr) details.push(`Specialty: ${r.specialtyDetails.nameEn || r.specialtyDetails.nameAr}`);
+                  if (r.hospitalDetails?.nameEn || r.hospitalDetails?.nameAr) details.push(`Hospital: ${r.hospitalDetails.nameEn || r.hospitalDetails.nameAr}`);
+                  if (r.doctorDetails?.fullname || r.doctorDetails?.fullnameAr) details.push(`Doctor: ${r.doctorDetails.fullname || r.doctorDetails.fullnameAr}`);
+                  if (r.averageRating) details.push(`Rating: ⭐${r.averageRating}/5`);
+                  if (r.yrsExp) details.push(`Experience: ${r.yrsExp} yrs`);
+                  if (r.price) details.push(`Price: ${r.price} ${r.currency || ''}`);
+                  if (r.status) details.push(`Status: ${r.status}`);
+                  if (r.bookingDate) details.push(`Date: ${new Date(r.bookingDate.iso || r.bookingDate).toLocaleDateString()}`);
+                  if (r.phonenumber) details.push(`Phone: ${r.phonenumber}`);
+
+                  return `  ${i + 1}. **${name}** ${details.length > 0 ? `(${details.join(' | ')})` : ''}`;
+                }).join('\n');
+
+                detailedSummary = `Found ${result.results.length} record(s) in **${result.className}**:\n${recordsList}`;
+              } else if (result.count !== undefined) {
+                detailedSummary += ` — **Total Count:** \`${result.count}\``;
               } else if (result.filename) {
-                extraInfo = ` — **File Saved:** \`workspace/${result.filename}\``;
+                detailedSummary += ` — **File Saved:** \`workspace/${result.filename}\``;
               }
-              onChunk(`> ✅ **Step ${stepIndex} Output:** ${summary}${extraInfo}\n\n`);
+
+              lastToolSummary = detailedSummary;
+              onChunk(`> ✅ **Step ${stepIndex} Output:** ${lastToolSummary}\n\n`);
             } else if (result.status === 'error') {
               onChunk(`> ❌ **Step ${stepIndex} Error:** ${result.message}\n\n`);
             }
@@ -169,8 +186,8 @@ export async function streamOllamaChatResponse({ model = 'qwen3:latest', message
       }
     }
 
-    if (!hasEmittedText && stepIndex > 0) {
-      onChunk('\n\n*(The live database service is currently offline. Please let me know what general information or guidance you need.)*');
+    if (!hasEmittedText && stepIndex > 0 && lastToolSummary) {
+      onChunk(`\n\n## 📋 Summary / ملخص النتائج\n${lastToolSummary}`);
     }
   } catch (streamErr) {
     console.error('Error during Ollama ADK execution:', streamErr);

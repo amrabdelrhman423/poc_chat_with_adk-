@@ -158,7 +158,7 @@ export class OllamaLlm extends BaseLlm {
     }
 
     // Plain text response
-    const text = msg.content || '';
+    const text = msg.content || (msg.thinking ? msg.thinking.trim() : '');
     return {
       content: {
         role: 'model',

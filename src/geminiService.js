@@ -100,19 +100,19 @@ export function sanitizeGeminiModel(modelId) {
  * @param {Function} onChunk - Callback to stream text chunks to the client
  */
 export async function streamChatResponse(
-  { apiKey, model = 'gemini-3.6-flash', messages = [], systemInstruction = '', temperature = 0.7, sessionId = 'default', sessionToken = null },
+  { apiKey, model = 'gemini-3.6-flash', messages = [], systemInstruction = '', temperature = 0.7, sessionId = 'default', sessionToken = null, userUid = null },
   onChunk
 ) {
   const key = resolveApiKey(apiKey);
   const effectiveModel = sanitizeGeminiModel(model);
 
-  // Build a fresh LlmAgent + Runner for this request
-  const agent = createLlmAgent({ apiKey: key, model: effectiveModel, instruction: systemInstruction, sessionToken });
+  // Build a fresh LlmAgent + Runner for this request (uses Manager Agent with subAgents)
+  const agent = createLlmAgent({ apiKey: key, model: effectiveModel, instruction: systemInstruction, sessionToken, userUid });
   const runner = createRunner(agent);
 
   // Ensure a persistent session exists (keyed per chat)
   const userId = 'web_user';
-  await ensureSession(userId, sessionId);
+  await ensureSession(userId, sessionId, userUid ? { user_uid: userUid } : {});
 
   // Extract only the last user message as the new input for this turn.
   // The ADK session service holds full history; we only send the latest message.
@@ -157,24 +157,23 @@ export async function streamChatResponse(
 
   let stepIndex = 0;
   let hasEmittedText = false;
+  let lastToolSummary = '';
 
   try {
     for await (const event of eventStream) {
-      const eventType = event.eventType;
-
-      // Stream text content parts from model response events
+      // 1. Stream text content parts from model response events
       if (event.content && event.content.parts) {
         for (const part of event.content.parts) {
-          if (part.text) {
+          if (part.text && part.text.trim()) {
             hasEmittedText = true;
             onChunk(part.text);
           }
         }
       }
 
-      // Notify when the agent calls a tool (tool_call event)
-      if (eventType === 'tool_call') {
-        const calls = getFunctionCalls(event);
+      // 2. Detect and stream tool calls
+      const calls = getFunctionCalls(event);
+      if (calls && calls.length > 0) {
         for (const call of calls) {
           stepIndex++;
           
@@ -201,23 +200,41 @@ export async function streamChatResponse(
         }
       }
 
-      // Notify when a tool result comes back (tool_result event)
-      if (eventType === 'tool_result') {
-        const responses = getFunctionResponses(event);
+      // 3. Detect and stream tool responses
+      const responses = getFunctionResponses(event);
+      if (responses && responses.length > 0) {
         for (const resp of responses) {
           const result = resp.response;
           if (result) {
             if (result.status === 'success') {
-              const summary = result.message || `Query completed for ${result.className || 'workspace'}.`;
-              let extraInfo = '';
-              if (result.count !== undefined) {
-                extraInfo = ` — **Total Count:** \`${result.count}\``;
-              } else if (result.results && Array.isArray(result.results)) {
-                extraInfo = ` — **Returned:** \`${result.results.length}\` record(s)`;
+              let detailedSummary = result.message || `Query completed for ${result.className || 'workspace'}.`;
+              if (result.results && Array.isArray(result.results) && result.results.length > 0) {
+                const recordsList = result.results.map((r, i) => {
+                  const name = r.fullname || r.fullnameAr || r.nameEn || r.nameAr || r.detailsEn || r.objectId || `Record #${i+1}`;
+                  const details = [];
+                  if (r.title || r.positionAr || r.positionEn) details.push(`Title: ${r.title || r.positionAr || r.positionEn}`);
+                  if (r.specialtyDetails?.nameEn || r.specialtyDetails?.nameAr) details.push(`Specialty: ${r.specialtyDetails.nameEn || r.specialtyDetails.nameAr}`);
+                  if (r.hospitalDetails?.nameEn || r.hospitalDetails?.nameAr) details.push(`Hospital: ${r.hospitalDetails.nameEn || r.hospitalDetails.nameAr}`);
+                  if (r.doctorDetails?.fullname || r.doctorDetails?.fullnameAr) details.push(`Doctor: ${r.doctorDetails.fullname || r.doctorDetails.fullnameAr}`);
+                  if (r.averageRating) details.push(`Rating: ⭐${r.averageRating}/5`);
+                  if (r.yrsExp) details.push(`Experience: ${r.yrsExp} yrs`);
+                  if (r.price) details.push(`Price: ${r.price} ${r.currency || ''}`);
+                  if (r.status) details.push(`Status: ${r.status}`);
+                  if (r.bookingDate) details.push(`Date: ${new Date(r.bookingDate.iso || r.bookingDate).toLocaleDateString()}`);
+                  if (r.phonenumber) details.push(`Phone: ${r.phonenumber}`);
+
+                  return `  ${i + 1}. **${name}** ${details.length > 0 ? `(${details.join(' | ')})` : ''}`;
+                }).join('\n');
+
+                detailedSummary = `Found ${result.results.length} record(s) in **${result.className}**:\n${recordsList}`;
+              } else if (result.count !== undefined) {
+                detailedSummary += ` — **Total Count:** \`${result.count}\``;
               } else if (result.filename) {
-                extraInfo = ` — **File Saved:** \`workspace/${result.filename}\``;
+                detailedSummary += ` — **File Saved:** \`workspace/${result.filename}\``;
               }
-              onChunk(`> ✅ **Step ${stepIndex} Output:** ${summary}${extraInfo}\n\n`);
+
+              lastToolSummary = detailedSummary;
+              onChunk(`> ✅ **Step ${stepIndex} Output:** ${lastToolSummary}\n\n`);
             } else if (result.status === 'error') {
               onChunk(`> ❌ **Step ${stepIndex} Error:** ${result.message}\n\n`);
             }
@@ -226,8 +243,8 @@ export async function streamChatResponse(
       }
     }
 
-    if (!hasEmittedText && stepIndex > 0) {
-      onChunk('\n\n*(The live database service is currently offline. Please let me know what general information or guidance you need.)*');
+    if (!hasEmittedText && stepIndex > 0 && lastToolSummary) {
+      onChunk(`\n\n## 📋 Summary / ملخص النتائج\n${lastToolSummary}`);
     }
   } catch (streamErr) {
     console.error('Error during Gemini ADK execution:', streamErr);

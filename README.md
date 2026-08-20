@@ -1,42 +1,46 @@
-# 🚀 Gemini & Ollama Agent Studio
+# 🚀 Gemini & Ollama Healthcare Multi-Agent Studio
 
-A state-of-the-art AI Chat and Agent execution platform powered by **Google ADK (`@google/adk`)**, **Google Gemini Cloud Models**, **Imagen 4.0**, **Local Ollama Models (Qwen3)**, **Parse Server Healthcare Database Integration**, and **Workspace File Management Tools**.
+A state-of-the-art AI Chat and Multi-Agent execution platform powered by **Google ADK (`@google/adk`)**, **Google Gemini Cloud Models**, **Imagen 4.0**, **Local Ollama Models (Qwen3)**, **Parse Server Healthcare Database Integration**, and **Multi-Agent Orchestration Architecture**.
 
 ---
 
 ## 🌟 Key Features
 
+- 🤖 **Multi-Agent Orchestration Architecture (Google ADK `subAgents`)**:
+  - **Manager / Orchestrator Agent (`manager_agent`)**: Intelligent routing and intent classification that delegates queries to specialized domain sub-agents.
+  - **Symptom & Recommendation Agent (`symptom_agent`)**: Analyzes patient symptoms (Arabic/English), performs multi-step relational lookups (`Specialties` → `HospitalDoctorSpecialty`), and recommends doctors and clinics with ratings and experience.
+  - **Medical Search Agent (`search_agent`)**: Handles direct searches for doctors by name, hospitals/clinics by area, medical packages, and patient reviews.
+  - **User Profile & Bookings Agent (`profile_agent`)**: Retrieves personal data for authenticated users (past/upcoming bookings, medical history, payments, and family members) scoped to the user's UID.
 - 🧠 **Dual AI Engine**:
   - **Google Gemini Cloud**: Powered by `@google/genai` & `@google/adk` (`gemini-2.5-flash`, `gemini-2.5-pro`, `gemini-2.5-flash-lite`, `gemini-3.6-flash`).
-  - **Local Ollama Models**: Run privacy-first local models (`qwen3`, `llama3`, `mistral`) with zero API costs using a custom `BaseLlm` adapter.
-- 🛠️ **Google ADK Framework Core**:
-  - Built on `@google/adk` using `LlmAgent`, `FunctionTool`, `Runner`, `InMemorySessionService`, and `FileArtifactService`.
-  - Native multi-step agent loop handling reasoning, function tool invocation, and multi-turn session persistence.
-- 🏥 **Parse Server Database Integration**:
-  - Direct REST integration with Parse Server using master key access and user session validation.
-  - Native ADK tools to query, count, filter, sort, paginate, and perform MongoDB-style aggregations on healthcare and user data (`Patients`, `Doctors`, `Hospitals`, `PatientsBookings`, `Payments`, etc.).
-  - Built-in graceful offline fallbacks when the live database is unreachable.
-- 🔐 **Parse Authentication**:
-  - Native Parse user authentication (`/login` and `/users/me`) with session token verification (`X-Parse-Session-Token`).
+  - **Local Ollama Models**: Run privacy-first local models (`qwen3:latest`, `llama3`, `mistral`) with zero API costs using a custom `BaseLlm` adapter supporting tool execution and reasoning/thinking traces.
+- 🏥 **Parse Server Healthcare Database Integration**:
+  - REST integration with Parse Server using master key access and user session validation.
+  - Native ADK tools to query, count, filter, sort, paginate, and perform MongoDB-style aggregations on healthcare and user data (`Patients`, `Doctors`, `Hospitals`, `PatientsBookings`, `Payments`, `HospitalDoctorSpecialty`, `Packages`, etc.).
+  - **Class Name Normalization**: Automatically maps variations/plurals/singulars (e.g., `doctor` → `Doctors`, `patientbookings` → `PatientsBookings`).
+  - Built-in graceful offline fallbacks and detailed summary extraction when tools return data.
+- 🔐 **Parse Authentication & Scoped User Sessions**:
+  - Native Parse user authentication (`/api/auth/login` and `/api/auth/me`) with session token verification (`X-Parse-Session-Token`).
+  - User UID extracted and stored in ADK session state to securely scope personal data access in `profile_agent`.
 - 📁 **Workspace File Tools & Live Explorer**:
-  - `write_file`: Agent creates and persists code, scripts, and documents directly into `./workspace/`.
+  - `write_file`: Agent creates and persists code, scripts, reports, and documents directly into `./workspace/`.
   - `read_file` & `list_files`: Agents inspect and list workspace contents.
   - Live interactive browser sidebar to view, preview, and download agent-created files.
 - 🎨 **Imagen 4.0 Text-to-Image**:
-  - Generate high-resolution images in chat via `/api/generate-image` or Imagen model selection.
+  - Generate high-resolution medical or general images in chat via `/api/generate-image` or Imagen model selection.
 - ⚡ **Real-Time Step-by-Step SSE Streaming**:
-  - Streams intermediate tool execution parameters, status indicators, and model text responses in real-time using Server-Sent Events (SSE).
+  - Streams intermediate tool execution parameters, status indicators, record breakdowns, and model text responses in real-time using Server-Sent Events (SSE).
 
 ---
 
-## 🏗️ Architecture & System Design
+## 🏗️ Multi-Agent Architecture & System Design
 
 ```
  ┌──────────────────────────────────────────────────────────────────┐
  │                         Web Browser UI                           │
  │     (Vanilla JS + SSE Stream + Marked.js + Highlight.js)         │
  └────────────────────────────────┬─────────────────────────────────┘
-                                  │ POST /api/chat
+                                  │ POST /api/chat (SSE)
                                   ▼
  ┌──────────────────────────────────────────────────────────────────┐
  │                          Express Server                          │
@@ -51,15 +55,30 @@ A state-of-the-art AI Chat and Agent execution platform powered by **Google ADK 
  │   (src/geminiService.js)     │    │   (src/ollamaService.js)     │
  └──────────────┬───────────────┘    └──────────────┬───────────────┘
                 │                                   │
-                │       ┌───────────────────┐       │
-                └──────►│   @google/adk     │◄──────┘
-                        │   LlmAgent        │
-                        │   FunctionTools   │
-                        │   Runner          │
-                        └─────────┬─────────┘
+                └─────────────────┬─────────────────┘
+                                  ▼
+                    ┌───────────────────────────┐
+                    │       MANAGER AGENT       │
+                    │   (src/agents/manager)    │
+                    │  Intent Routing & Orchestr.│
+                    └─────────────┬─────────────┘
                                   │
-          ┌───────────────────────┴───────────────────────┐
-          ▼                                               ▼
+         ┌────────────────────────┼────────────────────────┐
+         ▼                        ▼                        ▼
+┌──────────────────┐    ┌──────────────────┐    ┌──────────────────┐
+│  symptom_agent   │    │   search_agent   │    │  profile_agent   │
+│ Symptom Matching │    │ Doctor / Clinic  │    │ User Bookings &  │
+│ & Recommendation │    │ Package Search   │    │ Personal Profile │
+└────────┬─────────┘    └────────┬─────────┘    └────────┬─────────┘
+         │                       │                       │
+         └───────────────────────┼───────────────────────┘
+                                 ▼
+                     ┌───────────────────────┐
+                     │    ADK FunctionTools  │
+                     └───────────┬───────────┘
+                                 │
+         ┌───────────────────────┴───────────────────────┐
+         ▼                                               ▼
 ┌───────────────────┐                           ┌───────────────────┐
 │    workspace/     │                           │   Parse Server    │
 │  File Tools       │                           │   Database API    │
@@ -69,27 +88,40 @@ A state-of-the-art AI Chat and Agent execution platform powered by **Google ADK 
 
 ---
 
-## 🔄 Recent Changes & Key Improvements
+## 👥 Specialized Sub-Agents Breakdown
 
-1. **Parse Server Healthcare Database Tools**:
-   - Added `src/parseService.js` to provide low-level REST API interactions with Parse Server (querying, counting, aggregating, and user authentication).
-   - Integrated `query_parse_db`, `count_parse_records`, and `aggregate_parse_data` as native ADK `FunctionTool` definitions in `src/adkAgent.js`.
-   - Comprehensive database schema instructions injected into the system prompt covering 25+ Parse classes (such as `Patients`, `Doctors`, `Hospitals`, `PatientsBookings`, `Payments`, `ChatRooms`, and `Messages`).
-   - Implemented automatic pointer expansion (`include`) and regex search for seamless data exploration.
+| Sub-Agent | Name | Primary Responsibility | Data Classes / Sources |
+|---|---|---|---|
+| 👑 **Manager Agent** | `manager_agent` | Evaluates user prompt, maintains conversational context, routes to sub-agents or workspace tools. | Global Orchestrator & Workspace |
+| 🩺 **Symptom Agent** | `symptom_agent` | Matches patient symptoms / ailments to specialties and queries relational doctor assignments with ratings and clinic info. | `Specialties`, `HospitalDoctorSpecialty`, `Doctors`, `Hospitals` |
+| 🔍 **Search Agent** | `search_agent` | Direct search for specific doctors by name, hospitals by city/area, medical packages, and verified patient reviews. | `Doctors`, `Hospitals`, `Packages`, `DoctorsReviews` |
+| 👤 **Profile Agent** | `profile_agent` | Securely queries personal user data scoped to the authenticated user's UID (bookings, profile, invoices, family members). | `PatientsBookings`, `Patients`, `Payments`, `PatientFamilyMembers` |
 
-2. **Parse Authentication & Session Handling**:
-   - Added `/api/auth/login` and `/api/auth/me` endpoints in `server.js`.
-   - Propagated `sessionToken` from frontend auth modal through SSE streaming chat requests into ADK database tools.
+---
 
-3. **Graceful Offline Database Fallbacks**:
-   - Tool execution handlers safely catch database errors/timeouts and return clear status markers.
-   - System prompts instruct agents to explain connection status in user native language (e.g., Arabic/English) and pivot to general knowledge responses without breaking the conversation turn.
+## 🔄 Recent Changes & Architectural Upgrades
 
-4. **ADK Ollama Integration (`OllamaLlm`)**:
-   - Extended `@google/adk`'s `BaseLlm` with `src/ollamaLlm.js` to bring ADK's native function-calling loop and session runner to local Ollama models (e.g. `qwen3:latest`).
+1. **Modular Multi-Agent System (`src/agents/`)**:
+   - Refactored single-agent setup into a modular Google ADK `subAgents` architecture with a dedicated `manager_agent` orchestrator.
+   - Created specialized sub-agents: `symptomAgent.js`, `searchAgent.js`, and `profileAgent.js` with isolated domain instructions and schemas.
+   - Modularized schemas (`src/agents/dbSchema.js`) to provide targeted context to each sub-agent rather than overloading a single prompt.
 
-5. **Enhanced Real-Time Tool Call Streaming**:
-   - Updated SSE stream handlers to emit formatted Markdown blocks detailing tool calls, JSON input arguments, tool outputs, and record counts.
+2. **3-Step Relational Symptom Recommendation Workflow**:
+   - Implemented an enforced 3-step search pipeline for `symptom_agent`:
+     1. Search `Specialties` by symptom/complaint.
+     2. Query `HospitalDoctorSpecialty` using the specialty ID and expanded pointers (`include: "doctorDetails,hospitalDetails,specialtyDetails"`).
+     3. Format complete doctor and hospital profiles in clear natural language with a structured summary table (`## 📋 Summary / ملخص النتائج`).
+
+3. **Authenticated User Profile Scoping**:
+   - Integrated Parse user session token resolution in `server.js` (`verifyParseSessionToken`).
+   - Automatically injected `userUid` into the ADK Session state (`ensureSession`) and `profile_agent` context.
+
+4. **Parse Class Name Normalization**:
+   - Added `normalizeClassName` in `src/parseService.js` with comprehensive alias mappings (e.g. `doctor`, `doctors` → `Doctors`; `patientbooking`, `booking` → `PatientsBookings`).
+
+5. **Rich Record Output & Stream Fallback**:
+   - Enforced full-record presentation in system prompts (names, specialties, ratings, phone numbers, prices, dates) avoiding bare counts.
+   - Enhanced SSE streaming in `geminiService.js` and `ollamaService.js` to format tool results and ensure a structured summary is delivered.
 
 ---
 
@@ -97,21 +129,28 @@ A state-of-the-art AI Chat and Agent execution platform powered by **Google ADK 
 
 ```
 chat_ai/
-├── public/                 # Frontend Web Interface
-│   ├── index.html          # Main HTML structure & auth modals
-│   ├── css/style.css       # Dark-mode glassmorphism styling
-│   └── js/app.js           # Client chat engine, SSE stream parser, & workspace viewer
+├── public/                     # Frontend Web Interface
+│   ├── index.html              # Main HTML structure & auth modals
+│   ├── css/style.css           # Dark-mode glassmorphism styling
+│   └── js/app.js               # Client chat engine, SSE stream parser, & workspace viewer
 ├── src/
-│   ├── adkAgent.js         # Google ADK agent setup, FunctionTools & session runners
-│   ├── agentTools.js       # Workspace filesystem execution helpers
-│   ├── parseService.js     # Parse Server REST client, queries, & authentication
-│   ├── geminiService.js    # Gemini Cloud models integration & Imagen 4.0
-│   ├── ollamaLlm.js        # ADK BaseLlm adapter for Ollama models
-│   └── ollamaService.js    # Ollama model discovery & streaming handler
-├── workspace/              # Storage directory for agent-created files
-├── schema.json             # Parse database schema definitions reference
-├── server.js               # Express application server & API routes
-└── package.json            # Dependencies (@google/adk, @google/genai, express, etc.)
+│   ├── agents/                 # Multi-Agent Architecture (Google ADK)
+│   │   ├── dbSchema.js         # Modular schema definitions for sub-agents
+│   │   ├── managerAgent.js     # Manager / Orchestrator Agent
+│   │   ├── symptomAgent.js     # Symptom analysis & doctor recommendation sub-agent
+│   │   ├── searchAgent.js      # Direct doctor/hospital/package search sub-agent
+│   │   ├── profileAgent.js     # User bookings & personal data sub-agent
+│   │   └── tools.js            # Workspace & Parse DB ADK FunctionTools
+│   ├── adkAgent.js             # ADK Agent and Runner factory & session management
+│   ├── agentTools.js           # Workspace filesystem execution helpers
+│   ├── parseService.js         # Parse Server REST client, queries, normalization & auth
+│   ├── geminiService.js        # Gemini Cloud models integration & Imagen 4.0
+│   ├── ollamaLlm.js            # ADK BaseLlm adapter for Ollama models
+│   └── ollamaService.js        # Ollama model discovery & streaming handler
+├── workspace/                  # Storage directory for agent-created files
+├── schema.json                 # Complete Parse database schema reference
+├── server.js                   # Express application server & API routes
+└── package.json                # Project configuration and dependencies
 ```
 
 ---
@@ -152,7 +191,7 @@ chat_ai/
    PARSE_APP_ID=your_parse_app_id
    PARSE_MASTER_KEY=your_parse_master_key
    ```
-   *(Note: You can also configure your Gemini API Key directly via the settings UI).*
+   *(Note: You can also configure your Gemini API Key directly via the settings UI in the browser).*
 
 4. **Run the Application**:
    - **Development Mode**:
@@ -189,7 +228,7 @@ chat_ai/
       "model": "gemini-3.6-flash",
       "apiKey": "your_api_key",
       "chatId": "session-123",
-      "messages": [{ "role": "user", "text": "List confirmed patient bookings" }],
+      "messages": [{ "role": "user", "text": "عندي ألم في الركبة ومحتاج دكتور عظام" }],
       "sessionToken": "optional_parse_token"
     }
     ```
@@ -208,19 +247,29 @@ chat_ai/
 
 ## 💡 Usage Examples
 
-### 1. Database Exploration (Parse Server)
-> **User**: *"How many confirmed patient bookings do we have?"*
+### 1. Symptom Analysis & Doctor Recommendation
+> **User**: *"عندي ألم في المفاصل والركبة، مين دكتور كويس؟"*
 >
 > **Agent Execution**:
-> - Tool Call: `count_parse_records({ className: "PatientsBookings", where: '{"status":"confirmed"}' })`
-> - Agent Response: *"There are currently 42 confirmed patient bookings in the database."*
+> 1. `manager_agent` delegates to `symptom_agent`.
+> 2. `symptom_agent` executes `query_parse_db` on `Specialties` for orthopedic/rheumatology specialties.
+> 3. `symptom_agent` executes `query_parse_db` on `HospitalDoctorSpecialty` with `include: "doctorDetails,hospitalDetails,specialtyDetails"`.
+> 4. **Response**: Detailed doctor recommendations with names, hospital locations, ratings, contact numbers, and a formatted summary table.
 
-### 2. Workspace Code Generation
-> **User**: *"Write a Node.js script called analytics.js that calculates average patient age."*
+### 2. User Bookings & Profile Retrieval
+> **User**: *"Show me my upcoming appointments and bookings"*
 >
 > **Agent Execution**:
-> - Tool Call: `write_file({ filename: "analytics.js", content: "..." })`
-> - Result: File is written to `workspace/analytics.js` and immediately previewable in the UI sidebar.
+> 1. `manager_agent` delegates to `profile_agent` with the user's authenticated session.
+> 2. `profile_agent` executes `query_parse_db` on `PatientsBookings` filtered by `patientUid` with linked doctor and hospital details.
+> 3. **Response**: A formatted breakdown of appointment dates, time slots, doctor names, clinics, and booking status.
+
+### 3. Workspace Code & Report Generation
+> **User**: *"Write a Python script called medical_report.py that summarizes our patient statistics."*
+>
+> **Agent Execution**:
+> 1. `manager_agent` calls `write_file({ filename: "medical_report.py", content: "..." })`.
+> 2. **Result**: File is written directly to `workspace/medical_report.py` and previewable in the UI sidebar.
 
 ---
 

@@ -102,10 +102,64 @@ function parseRequest(method, endpoint, body = null, queryParams = {}, sessionTo
   });
 }
 
+const CLASS_NAME_MAP = {
+  'doctor': 'Doctors',
+  'doctors': 'Doctors',
+  'patient': 'Patients',
+  'patients': 'Patients',
+  'hospital': 'Hospitals',
+  'hospitals': 'Hospitals',
+  'specialty': 'Specialties',
+  'specialties': 'Specialties',
+  'speciality': 'Specialties',
+  'specialities': 'Specialties',
+  'booking': 'PatientsBookings',
+  'bookings': 'PatientsBookings',
+  'patientbooking': 'PatientsBookings',
+  'patientbookings': 'PatientsBookings',
+  'patientsbooking': 'PatientsBookings',
+  'patientsbookings': 'PatientsBookings',
+  'appointment': 'DoctorAppointments',
+  'appointments': 'DoctorAppointments',
+  'doctorappointment': 'DoctorAppointments',
+  'doctorappointments': 'DoctorAppointments',
+  'review': 'DoctorsReviews',
+  'reviews': 'DoctorsReviews',
+  'doctorreview': 'DoctorsReviews',
+  'doctorsreviews': 'DoctorsReviews',
+  'payment': 'Payments',
+  'payments': 'Payments',
+  'package': 'Packages',
+  'packages': 'Packages',
+  'user': '_User',
+  'users': '_User',
+  '_user': '_User',
+  '_users': '_User',
+  'chatroom': 'ChatRooms',
+  'chatrooms': 'ChatRooms',
+  'message': 'Messages',
+  'messages': 'Messages',
+  'videoroom': 'VideoRooms',
+  'videorooms': 'VideoRooms',
+  'city': 'Cities',
+  'cities': 'Cities',
+  'area': 'Areas',
+  'areas': 'Areas',
+  'adminprofile': 'AdminProfile',
+  'adminrole': 'AdminRole',
+  'admintype': 'AdminType'
+};
+
+export function normalizeClassName(className) {
+  if (!className || typeof className !== 'string') return className;
+  const clean = className.trim().replace(/[\s_-]+/g, '').toLowerCase();
+  return CLASS_NAME_MAP[clean] || className.trim();
+}
+
 /**
  * Query a Parse class with optional filters, sorting, pagination, field selection, and pointer includes.
  *
- * @param {string} className - Parse class name (e.g., 'Patients', 'Doctors')
+ * @param {string} rawClassName - Parse class name (e.g., 'Patients', 'Doctors')
  * @param {object} [where] - Parse query constraint object (e.g., { fullname: { $regex: "Ahmed", $options: "i" } })
  * @param {number} [limit=20] - Maximum number of results to return
  * @param {number} [skip=0] - Number of results to skip (for pagination)
@@ -114,7 +168,8 @@ function parseRequest(method, endpoint, body = null, queryParams = {}, sessionTo
  * @param {string} [keys] - Comma-separated field names to return (projection)
  * @returns {Promise<object>} { results: [...], count?: number }
  */
-export async function queryParseClass(className, { where, limit = 20, skip = 0, order, include, keys, sessionToken } = {}) {
+export async function queryParseClass(rawClassName, { where, limit = 20, skip = 0, order, include, keys, sessionToken } = {}) {
+  const className = normalizeClassName(rawClassName);
   const queryParams = {
     limit,
     skip,
@@ -139,12 +194,13 @@ export async function queryParseClass(className, { where, limit = 20, skip = 0, 
 /**
  * Count records in a Parse class with optional filters.
  *
- * @param {string} className - Parse class name
+ * @param {string} rawClassName - Parse class name
  * @param {object} [where] - Parse query constraint object
  * @param {string} [sessionToken] - Parse user session token
  * @returns {Promise<object>} { count: number, className: string }
  */
-export async function countParseClass(className, where = {}, sessionToken = null) {
+export async function countParseClass(rawClassName, where = {}, sessionToken = null) {
+  const className = normalizeClassName(rawClassName);
   const queryParams = {
     limit: 0,
     count: 1
@@ -165,13 +221,14 @@ export async function countParseClass(className, where = {}, sessionToken = null
  * Run an aggregation pipeline on a Parse class.
  * Uses the Parse aggregate endpoint for group/sum/avg/match operations.
  *
- * @param {string} className - Parse class name
+ * @param {string} rawClassName - Parse class name
  * @param {Array} pipeline - MongoDB-style aggregation pipeline array
  * @param {string} [sessionToken] - Parse user session token
  * @returns {Promise<object>} { results: [...], className: string }
  */
-export async function aggregateParseData(className, pipeline = [], sessionToken = null) {
-  // Parse Server aggregate endpoint: POST /aggregate/<className>
+export async function aggregateParseData(rawClassName, pipeline = [], sessionToken = null) {
+  const className = normalizeClassName(rawClassName);
+  // Parse Server aggregate endpoint: GET /aggregate/<className> with pipeline query param
   const result = await parseRequest('GET', `/aggregate/${className}`, null, {
     ...(pipeline.length > 0 ? { pipeline: JSON.stringify(pipeline) } : {})
   }, sessionToken);

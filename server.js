@@ -95,17 +95,30 @@ app.post('/api/chat', async (req, res) => {
   // Use chatId as sessionId for ADK session management (default to 'default' if not provided)
   const sessionId = chatId || 'default';
 
+  // Resolve user UID if sessionToken is provided
+  let userUid = null;
+  if (sessionToken) {
+    try {
+      const authUser = await verifyParseSessionToken(sessionToken);
+      if (authUser && authUser.user) {
+        userUid = authUser.user.objectId || authUser.user.uid;
+      }
+    } catch (authErr) {
+      console.warn('Session token verification failed:', authErr.message);
+    }
+  }
+
   try {
     if (isOllama) {
       await streamOllamaChatResponse(
-        { model, messages, systemInstruction, temperature, sessionId, sessionToken },
+        { model, messages, systemInstruction, temperature, sessionId, sessionToken, userUid },
         (chunkText) => {
           res.write(`data: ${JSON.stringify({ text: chunkText })}\n\n`);
         }
       );
     } else {
       await streamChatResponse(
-        { apiKey, model, messages, systemInstruction, temperature, topP, sessionId, sessionToken },
+        { apiKey, model, messages, systemInstruction, temperature, topP, sessionId, sessionToken, userUid },
         (chunkText) => {
           res.write(`data: ${JSON.stringify({ text: chunkText })}\n\n`);
         }
