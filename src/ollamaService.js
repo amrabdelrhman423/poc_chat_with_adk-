@@ -143,43 +143,18 @@ export async function streamOllamaChatResponse({ model = 'qwen3:latest', message
         }
       }
 
-      // 3. Detect and stream tool responses
+      // 3. Detect and stream tool responses with full record presentation
       const responses = getFunctionResponses(event);
       if (responses && responses.length > 0) {
         for (const resp of responses) {
           const result = resp.response;
           if (result) {
             if (result.status === 'success') {
-              let detailedSummary = result.message || `Query completed for ${result.className || 'workspace'}.`;
-              if (result.results && Array.isArray(result.results) && result.results.length > 0) {
-                const recordsList = result.results.map((r, i) => {
-                  const name = r.fullname || r.fullnameAr || r.nameEn || r.nameAr || r.detailsEn || r.objectId || `Record #${i+1}`;
-                  const details = [];
-                  if (r.title || r.positionAr || r.positionEn) details.push(`Title: ${r.title || r.positionAr || r.positionEn}`);
-                  if (r.specialtyDetails?.nameEn || r.specialtyDetails?.nameAr) details.push(`Specialty: ${r.specialtyDetails.nameEn || r.specialtyDetails.nameAr}`);
-                  if (r.hospitalDetails?.nameEn || r.hospitalDetails?.nameAr) details.push(`Hospital: ${r.hospitalDetails.nameEn || r.hospitalDetails.nameAr}`);
-                  if (r.doctorDetails?.fullname || r.doctorDetails?.fullnameAr) details.push(`Doctor: ${r.doctorDetails.fullname || r.doctorDetails.fullnameAr}`);
-                  if (r.averageRating) details.push(`Rating: ⭐${r.averageRating}/5`);
-                  if (r.yrsExp) details.push(`Experience: ${r.yrsExp} yrs`);
-                  if (r.price) details.push(`Price: ${r.price} ${r.currency || ''}`);
-                  if (r.status) details.push(`Status: ${r.status}`);
-                  if (r.bookingDate) details.push(`Date: ${new Date(r.bookingDate.iso || r.bookingDate).toLocaleDateString()}`);
-                  if (r.phonenumber) details.push(`Phone: ${r.phonenumber}`);
-
-                  return `  ${i + 1}. **${name}** ${details.length > 0 ? `(${details.join(' | ')})` : ''}`;
-                }).join('\n');
-
-                detailedSummary = `Found ${result.results.length} record(s) in **${result.className}**:\n${recordsList}`;
-              } else if (result.count !== undefined) {
-                detailedSummary += ` — **Total Count:** \`${result.count}\``;
-              } else if (result.filename) {
-                detailedSummary += ` — **File Saved:** \`workspace/${result.filename}\``;
-              }
-
-              lastToolSummary = detailedSummary;
-              onChunk(`> ✅ **Step ${stepIndex} Output:** ${lastToolSummary}\n\n`);
+              const { formatToolExecutionSummary } = await import('./geminiService.js');
+              lastToolSummary = formatToolExecutionSummary(result);
+              onChunk(`\n> ✅ **Step ${stepIndex} Output:**\n${lastToolSummary}\n\n`);
             } else if (result.status === 'error') {
-              onChunk(`> ❌ **Step ${stepIndex} Error:** ${result.message}\n\n`);
+              onChunk(`\n> ❌ **Step ${stepIndex} Error:** ${result.message || 'Operation failed.'}\n\n`);
             }
           }
         }
@@ -187,7 +162,7 @@ export async function streamOllamaChatResponse({ model = 'qwen3:latest', message
     }
 
     if (!hasEmittedText && stepIndex > 0 && lastToolSummary) {
-      onChunk(`\n\n## 📋 Summary / ملخص النتائج\n${lastToolSummary}`);
+      onChunk(`\n\n## 📋 Summary / ملخص النتائج\n\n${lastToolSummary}`);
     }
   } catch (streamErr) {
     console.error('Error during Ollama ADK execution:', streamErr);

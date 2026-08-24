@@ -1,127 +1,96 @@
-# 🚀 Gemini & Ollama Healthcare Multi-Agent Studio
+# 🚀 Gemini & Ollama Healthcare Multi-Agent Studio + RAG Vector Search
 
-A state-of-the-art AI Chat and Multi-Agent execution platform powered by **Google ADK (`@google/adk`)**, **Google Gemini Cloud Models**, **Imagen 4.0**, **Local Ollama Models (Qwen3)**, **Parse Server Healthcare Database Integration**, and **Multi-Agent Orchestration Architecture**.
+A state-of-the-art AI Healthcare Chat and Multi-Agent platform powered by **Google ADK (`@google/adk`)**, **Google Gemini Cloud Models**, **Imagen 4.0**, **Local Ollama Models (Qwen3)**, **Qdrant Vector Database (RAG Semantic & Hybrid Search)**, **Parse Server Healthcare Database**, and a **Closed-Loop Multi-Agent Orchestrator**.
 
 ---
 
 ## 🌟 Key Features
 
-- 🤖 **Multi-Agent Orchestration Architecture (Google ADK `subAgents`)**:
-  - **Manager / Orchestrator Agent (`manager_agent`)**: Intelligent routing and intent classification that delegates queries to specialized domain sub-agents.
-  - **Symptom & Recommendation Agent (`symptom_agent`)**: Analyzes patient symptoms (Arabic/English), performs multi-step relational lookups (`Specialties` → `HospitalDoctorSpecialty`), and recommends doctors and clinics with ratings and experience.
-  - **Medical Search Agent (`search_agent`)**: Handles direct searches for doctors by name, hospitals/clinics by area, medical packages, and patient reviews.
-  - **User Profile & Bookings Agent (`profile_agent`)**: Retrieves personal data for authenticated users (past/upcoming bookings, medical history, payments, and family members) scoped to the user's UID.
-- 🧠 **Dual AI Engine**:
-  - **Google Gemini Cloud**: Powered by `@google/genai` & `@google/adk` (`gemini-2.5-flash`, `gemini-2.5-pro`, `gemini-2.5-flash-lite`, `gemini-3.6-flash`).
-  - **Local Ollama Models**: Run privacy-first local models (`qwen3:latest`, `llama3`, `mistral`) with zero API costs using a custom `BaseLlm` adapter supporting tool execution and reasoning/thinking traces.
+- 🧠 **RAG (Retrieval-Augmented Generation) & Semantic Vector Search (Qdrant)**:
+  - **4 Dedicated Vector Collections**: `doctors`, `hospitals`, `specialties`, and `hospital_doctor_specialty` (composite relations).
+  - **AI Vector Embeddings**: Multilingual vector embeddings via Google `text-embedding-004` (768 dimensions) with automatic rate-limit retry & exponential backoff.
+  - **Meaning-Based Search**: Understands medical intent, symptoms, spelling variations, and typos in Arabic and English (e.g. *"دكتور جمال ابو الصرور"* matches *"جمال ابو السرور"* with 68%+ confidence).
+  - **Hybrid Search**: Combines semantic embeddings with structured metadata filtering (gender, rating, experience, hospital type).
+  - **Automated Sync Pipeline (`syncQdrant.js`)**: Syncs relational records from Parse Server to Qdrant vector database with rich composite embeddings.
+
+- 🤖 **Closed-Loop Multi-Agent Orchestrator (Google ADK `subAgents`)**:
+  - **Manager Agent (`manager_agent`)**: Intelligent orchestrator with a 3-tier lifecycle:
+    1. **Tier 1 (Intent Delegation)**: Routes user queries to domain specialists (`symptom_agent`, `search_agent`, `profile_agent`).
+    2. **Tier 2 (Automatic RAG Fallback)**: If a sub-agent misses or finds 0 records (due to typos or natural language phrasing), the Manager automatically triggers `rag_agent` across Qdrant vectors.
+    3. **Tier 3 (Compatibility & Refinement Loop)**: Evaluates RAG output; if the user requires relational records (reviews, packages, appointment slots), extracts the resolved entity UID and loops back to `search_agent` or `profile_agent` with the exact ID before finalizing the response.
+  - **RAG Agent (`rag_agent`)**: Semantic vector search specialist across Qdrant collections.
+  - **Symptom Agent (`symptom_agent`)**: Analyzes symptoms/pain, maps ailments to specialties, and retrieves matching doctors and hospital clinics.
+  - **Search Agent (`search_agent`)**: Direct lookup for doctors by name, hospitals by city/area, medical packages, and verified patient reviews.
+  - **Profile Agent (`profile_agent`)**: Securely queries personal user data scoped to the authenticated user's UID (bookings, profile, invoices, family members).
+
+- ⚡ **Qwen & Local LLM Optimization**:
+  - **Auto-Repairing JSON Adapter (`src/ollamaLlm.js`)**: Sanitizes and repairs tool calling syntax artifacts from local models (unescaped quotes, trailing commas, stray brackets) before tool execution.
+  - **Simplified Search Tools (`search_doctors`, `search_hospitals`)**: High-level tools that take plain string/number parameters instead of requiring local LLMs to construct complex nested MongoDB `$or` regex JSON.
+  - **Automatic Prefix Stripping & Vector Fallback**: Automatically cleans doctor title prefixes (`دكتور`, `دكتورة`, `طبيب`, `Dr.`) and seamlessly checks vector embeddings if exact text matching returns 0 results.
+
+- 🌐 **Strict Language Mirroring & Top-Score Ranking**:
+  - **Language Mirroring**: Automatically responds 100% in natural **Arabic** for Arabic prompts (`## 📋 ملخص النتائج`) and 100% in natural **English** for English prompts (`## 📋 Summary of Results`).
+  - **Top-Score First**: Results are sorted descending by relevance score, highlighting the **Top Match** (`🥇 Best Match / النتيجة الأقرب`) with its similarity percentage at the top.
+  - **100% Complete Record Presentation**: Guarantees full display of all doctor/hospital fields (Names in EN & AR, Specialty, Title, Qualifications, Experience, Ratings, Hospital Address, Phone, Email, Working Hours).
+
 - 🏥 **Parse Server Healthcare Database Integration**:
-  - REST integration with Parse Server using master key access and user session validation.
-  - Native ADK tools to query, count, filter, sort, paginate, and perform MongoDB-style aggregations on healthcare and user data (`Patients`, `Doctors`, `Hospitals`, `PatientsBookings`, `Payments`, `HospitalDoctorSpecialty`, `Packages`, etc.).
-  - **Class Name Normalization**: Automatically maps variations/plurals/singulars (e.g., `doctor` → `Doctors`, `patientbookings` → `PatientsBookings`).
-  - Built-in graceful offline fallbacks and detailed summary extraction when tools return data.
-- 🔐 **Parse Authentication & Scoped User Sessions**:
-  - Native Parse user authentication (`/api/auth/login` and `/api/auth/me`) with session token verification (`X-Parse-Session-Token`).
-  - User UID extracted and stored in ADK session state to securely scope personal data access in `profile_agent`.
+  - Direct REST integration using Master Key access and User Session verification (`X-Parse-Session-Token`).
+  - Query, count, filter, sort, and MongoDB-style aggregation pipelines across healthcare classes (`Patients`, `Doctors`, `Hospitals`, `PatientsBookings`, `Payments`, `HospitalDoctorSpecialty`, `Packages`, etc.).
+  - **Class Name Normalization**: Automatically maps variations (e.g. `doctor` → `Doctors`, `patientbooking` → `PatientsBookings`).
+
 - 📁 **Workspace File Tools & Live Explorer**:
-  - `write_file`: Agent creates and persists code, scripts, reports, and documents directly into `./workspace/`.
-  - `read_file` & `list_files`: Agents inspect and list workspace contents.
+  - `write_file`, `read_file`, `list_files`: Agents create code, analysis reports, and documents directly into `./workspace/`.
   - Live interactive browser sidebar to view, preview, and download agent-created files.
-- 🎨 **Imagen 4.0 Text-to-Image**:
-  - Generate high-resolution medical or general images in chat via `/api/generate-image` or Imagen model selection.
+
+- 🎨 **Imagen 4.0 Image Generation**:
+  - Generate high-resolution medical illustrations, diagrams, or logos directly in chat via Google Imagen 4.0.
+
 - ⚡ **Real-Time Step-by-Step SSE Streaming**:
-  - Streams intermediate tool execution parameters, status indicators, record breakdowns, and model text responses in real-time using Server-Sent Events (SSE).
+  - Streams intermediate tool execution steps, parameter blocks, status badges, and formatted record breakdowns in real-time via Server-Sent Events (SSE).
 
 ---
 
-## 🏗️ Multi-Agent Architecture & System Design
+## 🏗️ Architecture & Interaction Flow
 
-```
- ┌──────────────────────────────────────────────────────────────────┐
- │                         Web Browser UI                           │
- │     (Vanilla JS + SSE Stream + Marked.js + Highlight.js)         │
- └────────────────────────────────┬─────────────────────────────────┘
-                                  │ POST /api/chat (SSE)
-                                  ▼
- ┌──────────────────────────────────────────────────────────────────┐
- │                          Express Server                          │
- │                           (server.js)                            │
- └──────────────┬───────────────────────────────────┬───────────────┘
-                │                                   │
-      provider === 'gemini'               provider === 'ollama'
-                │                                   │
-                ▼                                   ▼
- ┌──────────────────────────────┐    ┌──────────────────────────────┐
- │       Gemini ADK Agent       │    │       Ollama ADK Agent       │
- │   (src/geminiService.js)     │    │   (src/ollamaService.js)     │
- └──────────────┬───────────────┘    └──────────────┬───────────────┘
-                │                                   │
-                └─────────────────┬─────────────────┘
-                                  ▼
-                    ┌───────────────────────────┐
-                    │       MANAGER AGENT       │
-                    │   (src/agents/manager)    │
-                    │  Intent Routing & Orchestr.│
-                    └─────────────┬─────────────┘
-                                  │
-         ┌────────────────────────┼────────────────────────┐
-         ▼                        ▼                        ▼
-┌──────────────────┐    ┌──────────────────┐    ┌──────────────────┐
-│  symptom_agent   │    │   search_agent   │    │  profile_agent   │
-│ Symptom Matching │    │ Doctor / Clinic  │    │ User Bookings &  │
-│ & Recommendation │    │ Package Search   │    │ Personal Profile │
-└────────┬─────────┘    └────────┬─────────┘    └────────┬─────────┘
-         │                       │                       │
-         └───────────────────────┼───────────────────────┘
-                                 ▼
-                     ┌───────────────────────┐
-                     │    ADK FunctionTools  │
-                     └───────────┬───────────┘
-                                 │
-         ┌───────────────────────┴───────────────────────┐
-         ▼                                               ▼
-┌───────────────────┐                           ┌───────────────────┐
-│    workspace/     │                           │   Parse Server    │
-│  File Tools       │                           │   Database API    │
-│(write, read, list)│                           │(query, count, agg)│
-└───────────────────┘                           └───────────────────┘
+```mermaid
+flowchart TD
+    UserQuery["👤 User Message (Arabic / English)"] --> Manager["🤖 Manager Agent (Orchestrator)"]
+    
+    Manager -->|"Tier 1: Intent Routing"| Choice{"Intent Decision"}
+    Choice -->|"Symptoms / Health Complaints"| SymptomAgent["🩺 symptom_agent"]
+    Choice -->|"Direct Search / Packages / Reviews"| SearchAgent["🔍 search_agent"]
+    Choice -->|"User Bookings / Profile"| ProfileAgent["👤 profile_agent"]
+    
+    SymptomAgent -->|"Data Found"| CompleteResponse["✅ 100% Complete Response to User"]
+    SearchAgent -->|"Data Found"| CompleteResponse
+    ProfileAgent -->|"Data Found"| CompleteResponse
+    
+    SymptomAgent -->|"❌ 0 Records / Ambiguous"| Fallback["Return to Manager"]
+    SearchAgent -->|"❌ 0 Records / Typo in Name"| Fallback
+    ProfileAgent -->|"❌ 0 Records found"| Fallback
+    
+    Fallback -->|"Tier 2: Vector Search Fallback"| RagAgent["🧠 rag_agent (Qdrant Vector DB)"]
+    RagAgent -->|"Top Semantic Matches (Score %)"| Evaluation["🤖 Manager Evaluates Compatibility"]
+    
+    Evaluation -->|"Complete & Direct Answer"| CompleteResponse
+    Evaluation -->|"Needs Relational Data (Slots / Reviews / Packages)"| RefineLoop["Tier 3: Iterative Refinement Loop"]
+    
+    RefineLoop -->|"Pass Resolved doctorUid"| SearchAgent
+    RefineLoop -->|"Pass Resolved specialtyUid"| SymptomAgent
+    RefineLoop -->|"Pass Resolved doctor for Booking"| ProfileAgent
 ```
 
 ---
 
-## 👥 Specialized Sub-Agents Breakdown
+## 👥 Specialized Multi-Agent Team
 
-| Sub-Agent | Name | Primary Responsibility | Data Classes / Sources |
+| Sub-Agent | Identifier | Primary Responsibility | Data Sources & Tools |
 |---|---|---|---|
-| 👑 **Manager Agent** | `manager_agent` | Evaluates user prompt, maintains conversational context, routes to sub-agents or workspace tools. | Global Orchestrator & Workspace |
-| 🩺 **Symptom Agent** | `symptom_agent` | Matches patient symptoms / ailments to specialties and queries relational doctor assignments with ratings and clinic info. | `Specialties`, `HospitalDoctorSpecialty`, `Doctors`, `Hospitals` |
-| 🔍 **Search Agent** | `search_agent` | Direct search for specific doctors by name, hospitals by city/area, medical packages, and verified patient reviews. | `Doctors`, `Hospitals`, `Packages`, `DoctorsReviews` |
+| 👑 **Manager Agent** | `manager_agent` | 3-tier closed-loop orchestrator: routes intent, supervises missing data, triggers RAG fallback, and executes refinement loops. | Global Orchestrator & Workspace |
+| 🧠 **RAG Agent** | `rag_agent` | AI Semantic vector search across Qdrant vector database (multilingual understanding, typos, and concept matching). | `rag_semantic_search`, `rag_hybrid_search`, Qdrant Collections |
+| 🩺 **Symptom Agent** | `symptom_agent` | Analyzes patient symptoms and maps conditions to specialties and doctor recommendations. | `semanticSearchTool`, `search_doctors`, `query_parse_db` |
+| 🔍 **Search Agent** | `search_agent` | Direct search for doctors, hospitals, medical packages, and patient reviews. | `search_doctors`, `search_hospitals`, `query_parse_db`, `rag_semantic_search` |
 | 👤 **Profile Agent** | `profile_agent` | Securely queries personal user data scoped to the authenticated user's UID (bookings, profile, invoices, family members). | `PatientsBookings`, `Patients`, `Payments`, `PatientFamilyMembers` |
-
----
-
-## 🔄 Recent Changes & Architectural Upgrades
-
-1. **Modular Multi-Agent System (`src/agents/`)**:
-   - Refactored single-agent setup into a modular Google ADK `subAgents` architecture with a dedicated `manager_agent` orchestrator.
-   - Created specialized sub-agents: `symptomAgent.js`, `searchAgent.js`, and `profileAgent.js` with isolated domain instructions and schemas.
-   - Modularized schemas (`src/agents/dbSchema.js`) to provide targeted context to each sub-agent rather than overloading a single prompt.
-
-2. **3-Step Relational Symptom Recommendation Workflow**:
-   - Implemented an enforced 3-step search pipeline for `symptom_agent`:
-     1. Search `Specialties` by symptom/complaint.
-     2. Query `HospitalDoctorSpecialty` using the specialty ID and expanded pointers (`include: "doctorDetails,hospitalDetails,specialtyDetails"`).
-     3. Format complete doctor and hospital profiles in clear natural language with a structured summary table (`## 📋 Summary / ملخص النتائج`).
-
-3. **Authenticated User Profile Scoping**:
-   - Integrated Parse user session token resolution in `server.js` (`verifyParseSessionToken`).
-   - Automatically injected `userUid` into the ADK Session state (`ensureSession`) and `profile_agent` context.
-
-4. **Parse Class Name Normalization**:
-   - Added `normalizeClassName` in `src/parseService.js` with comprehensive alias mappings (e.g. `doctor`, `doctors` → `Doctors`; `patientbooking`, `booking` → `PatientsBookings`).
-
-5. **Rich Record Output & Stream Fallback**:
-   - Enforced full-record presentation in system prompts (names, specialties, ratings, phone numbers, prices, dates) avoiding bare counts.
-   - Enhanced SSE streaming in `geminiService.js` and `ollamaService.js` to format tool results and ensure a structured summary is delivered.
 
 ---
 
@@ -136,17 +105,23 @@ chat_ai/
 ├── src/
 │   ├── agents/                 # Multi-Agent Architecture (Google ADK)
 │   │   ├── dbSchema.js         # Modular schema definitions for sub-agents
-│   │   ├── managerAgent.js     # Manager / Orchestrator Agent
-│   │   ├── symptomAgent.js     # Symptom analysis & doctor recommendation sub-agent
+│   │   ├── managerAgent.js     # Closed-Loop Manager Orchestrator Agent
+│   │   ├── ragAgent.js         # Semantic & Hybrid Vector Search Agent
+│   │   ├── ragTools.js         # RAG FunctionTools for ADK
 │   │   ├── searchAgent.js      # Direct doctor/hospital/package search sub-agent
+│   │   ├── symptomAgent.js     # Symptom analysis & doctor recommendation sub-agent
 │   │   ├── profileAgent.js     # User bookings & personal data sub-agent
-│   │   └── tools.js            # Workspace & Parse DB ADK FunctionTools
+│   │   └── tools.js            # Simplified search tools, safeParseJson, & Parse DB tools
 │   ├── adkAgent.js             # ADK Agent and Runner factory & session management
 │   ├── agentTools.js           # Workspace filesystem execution helpers
+│   ├── embeddingService.js     # Google text-embedding-004 client with rate-limit retry logic
+│   ├── geminiService.js        # Gemini Cloud models integration & rich SSE output formatter
+│   ├── ollamaLlm.js            # ADK BaseLlm adapter for Ollama with JSON auto-repair
+│   ├── ollamaService.js        # Ollama model discovery & streaming handler
 │   ├── parseService.js         # Parse Server REST client, queries, normalization & auth
-│   ├── geminiService.js        # Gemini Cloud models integration & Imagen 4.0
-│   ├── ollamaLlm.js            # ADK BaseLlm adapter for Ollama models
-│   └── ollamaService.js        # Ollama model discovery & streaming handler
+│   ├── qdrantService.js        # Qdrant client, collections management, & vector queries
+│   ├── ragService.js           # RAG orchestrator, composite text builder, & context ranker
+│   └── syncQdrant.js           # Parse Server → Qdrant sync migration script
 ├── workspace/                  # Storage directory for agent-created files
 ├── schema.json                 # Complete Parse database schema reference
 ├── server.js                   # Express application server & API routes
@@ -159,11 +134,17 @@ chat_ai/
 
 ### Prerequisites
 
-- **Node.js**: v18.0.0 or higher installed.
-- **Ollama** *(Optional for local models)*: Installed and running locally (`ollama run qwen3:latest`).
-- **Parse Server** *(Optional for live DB features)*: A running Parse Server instance with Master Key configuration.
+- **Node.js**: v18.0.0 or higher.
+- **Qdrant Vector Database**: Running locally or remotely via Docker:
+  ```bash
+  docker run -p 6333:6333 -p 6334:6334 -v qdrant_storage:/qdrant/storage qdrant/qdrant
+  ```
+- **Ollama** *(Optional for local models)*: Running locally (`ollama run qwen3:latest`).
+- **Parse Server** *(Optional for live DB features)*: Running instance with Master Key access.
 
-### Installation
+---
+
+### Installation & Setup
 
 1. **Clone the repository**:
    ```bash
@@ -176,11 +157,14 @@ chat_ai/
    npm install
    ```
 
-3. **Configure Environment Variables**:
-   Create a `.env` file in the root directory:
+3. **Configure Environment Variables (`.env`)**:
    ```env
    PORT=3000
    GEMINI_API_KEY=your_gemini_api_key_here
+
+   # Qdrant Vector Database
+   QDRANT_URL=http://localhost:6333
+   QDRANT_API_KEY=
 
    # Ollama Configuration
    OLLAMA_HOST=127.0.0.1
@@ -191,9 +175,14 @@ chat_ai/
    PARSE_APP_ID=your_parse_app_id
    PARSE_MASTER_KEY=your_parse_master_key
    ```
-   *(Note: You can also configure your Gemini API Key directly via the settings UI in the browser).*
 
-4. **Run the Application**:
+4. **Sync Parse Database to Qdrant Vectors**:
+   ```bash
+   npm run sync:qdrant
+   ```
+   *This migrates Doctors, Hospitals, Specialties, and HospitalDoctorSpecialty into vector embeddings in Qdrant.*
+
+5. **Start the Application**:
    - **Development Mode**:
      ```bash
      npm run dev
@@ -208,38 +197,24 @@ chat_ai/
 
 ## 📡 API Reference
 
+### 🧠 RAG & Vector Search
+- **`GET /api/rag/status`**: View Qdrant collections and vector count statistics.
+- **`POST /api/rag/search`**: Direct semantic and hybrid search API.
+  - **Body**: `{ "query": "دكتور عظام", "collections": ["doctors", "hospital_doctor_specialty"], "topK": 5 }`
+- **`POST /api/rag/sync`**: Trigger manual Parse → Qdrant vector sync.
+
 ### 🔐 Authentication
-
 - **`POST /api/auth/login`**: Authenticate Parse user credentials.
-  - **Body**: `{ "username": "...", "password": "..." }`
-  - **Response**: User details and `sessionToken`.
-
-- **`GET /api/auth/me`**: Verify current Parse session token.
-  - **Header**: `X-Parse-Session-Token: <token>`
+- **`GET /api/auth/me`**: Verify current Parse session token (`X-Parse-Session-Token`).
 
 ### 💬 Chat & Models
-
-- **`GET /api/models`**: List available Google Gemini and local Ollama models.
+- **`GET /api/models`**: List available Gemini and local Ollama models.
 - **`POST /api/chat`**: Server-Sent Events (SSE) streaming chat endpoint.
-  - **Body**:
-    ```json
-    {
-      "provider": "gemini",
-      "model": "gemini-3.6-flash",
-      "apiKey": "your_api_key",
-      "chatId": "session-123",
-      "messages": [{ "role": "user", "text": "عندي ألم في الركبة ومحتاج دكتور عظام" }],
-      "sessionToken": "optional_parse_token"
-    }
-    ```
 
 ### 🎨 Image Generation
-
 - **`POST /api/generate-image`**: Generate images using Google Imagen 4.0.
-  - **Body**: `{ "prompt": "A modern medical clinic logo", "aspectRatio": "1:1", "numberOfImages": 1 }`
 
 ### 📁 Workspace Files
-
 - **`GET /api/workspace/files`**: List all files saved in `./workspace/`.
 - **`GET /api/workspace/file/*`**: Read specific file content from `./workspace/`.
 
@@ -247,32 +222,36 @@ chat_ai/
 
 ## 💡 Usage Examples
 
-### 1. Symptom Analysis & Doctor Recommendation
-> **User**: *"عندي ألم في المفاصل والركبة، مين دكتور كويس؟"*
+### 1. Typo-Tolerant Doctor Search (RAG Fallback)
+> **User**: *"ابحث عن دكتور جمال ابو الصرور"*
 >
-> **Agent Execution**:
+> **Execution Flow**:
+> 1. `manager_agent` routes to `search_agent`.
+> 2. Exact match returns 0 due to the typo (*"الصرور"* vs *"السرور"*).
+> 3. `manager_agent` activates `rag_agent` across Qdrant vectors.
+> 4. RAG matches **Dr. Gamal Abu El Suror (جمال ابو السرور)** with **67.9% Match Score**.
+> 5. **Output**: Full Arabic profile with title, 36 years experience, 4/5 rating, El Galaa Hospital in Maadi, phone number (`201003456789`), email, and Summary Table (`## 📋 ملخص النتائج`).
+
+### 2. Multi-Step Symptom & Doctor Recommendation
+> **User**: *"عندي ألم شديد في المفاصل والركبة، مين دكتور كويس؟"*
+>
+> **Execution Flow**:
 > 1. `manager_agent` delegates to `symptom_agent`.
-> 2. `symptom_agent` executes `query_parse_db` on `Specialties` for orthopedic/rheumatology specialties.
-> 3. `symptom_agent` executes `query_parse_db` on `HospitalDoctorSpecialty` with `include: "doctorDetails,hospitalDetails,specialtyDetails"`.
-> 4. **Response**: Detailed doctor recommendations with names, hospital locations, ratings, contact numbers, and a formatted summary table.
+> 2. `symptom_agent` performs vector semantic search for orthopedic/rheumatology care.
+> 3. Links doctors, hospital branches, ratings, and phone contacts.
+> 4. **Output**: Top-scored doctor matches presented in Arabic with full credentials and summary table.
 
-### 2. User Bookings & Profile Retrieval
-> **User**: *"Show me my upcoming appointments and bookings"*
+### 3. Refinement Loop for Relational Reviews & Packages
+> **User**: *"هل دكتور جمال ابو السرور عنده تقييمات من المرضى؟"*
 >
-> **Agent Execution**:
-> 1. `manager_agent` delegates to `profile_agent` with the user's authenticated session.
-> 2. `profile_agent` executes `query_parse_db` on `PatientsBookings` filtered by `patientUid` with linked doctor and hospital details.
-> 3. **Response**: A formatted breakdown of appointment dates, time slots, doctor names, clinics, and booking status.
-
-### 3. Workspace Code & Report Generation
-> **User**: *"Write a Python script called medical_report.py that summarizes our patient statistics."*
->
-> **Agent Execution**:
-> 1. `manager_agent` calls `write_file({ filename: "medical_report.py", content: "..." })`.
-> 2. **Result**: File is written directly to `workspace/medical_report.py` and previewable in the UI sidebar.
+> **Execution Flow**:
+> 1. `manager_agent` delegates to `rag_agent` to resolve Doctor UID (`BW8OhTicZP`).
+> 2. `manager_agent` loops back to `search_agent` with resolved `doctorUid`.
+> 3. `search_agent` queries `DoctorsReviews` for verified reviews.
+> 4. **Output**: Doctor profile + actual patient reviews combined in the response.
 
 ---
 
 ## 📜 License
 
-MIT License. Developed with Google ADK, Gemini, & Ollama.
+MIT License. Developed with Google ADK, Gemini, Ollama, & Qdrant.

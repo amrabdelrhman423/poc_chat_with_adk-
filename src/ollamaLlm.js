@@ -32,7 +32,7 @@ export class OllamaLlm extends BaseLlm {
       messages,
       stream: false, // Ollama non-streaming for reliable tool_call parsing
       options: {
-        temperature: llmRequest.config?.temperature ?? 0.7
+        temperature: llmRequest.config?.temperature ?? 0.3
       }
     };
 
@@ -125,7 +125,7 @@ export class OllamaLlm extends BaseLlm {
 
   /**
    * Converts Ollama /api/chat response to an ADK LlmResponse object.
-   * Handles both text responses and tool_calls.
+   * Handles both text responses and tool_calls with resilient argument parsing and auto-repair.
    */
   _convertOllamaResponseToLlmResponse(body) {
     const msg = body.message || {};
@@ -141,12 +141,30 @@ export class OllamaLlm extends BaseLlm {
 
       for (const tc of msg.tool_calls) {
         const fnCall = tc.function || tc;
+        let parsedArgs = {};
+
+        if (typeof fnCall.arguments === 'object' && fnCall.arguments !== null) {
+          parsedArgs = fnCall.arguments;
+        } else if (typeof fnCall.arguments === 'string') {
+          parsedArgs = this._repairAndParseJson(fnCall.arguments, {});
+        }
+
+        // Deep-clean stringified JSON fields inside arguments (such as 'where', 'pipeline', 'filters')
+        for (const [key, value] of Object.entries(parsedArgs)) {
+          if (typeof value === 'string' && (value.startsWith('{') || value.startsWith('['))) {
+            try {
+              // Test if it's stringified JSON and clean it up if broken
+              parsedArgs[key] = this._cleanJsonString(value);
+            } catch {
+              // Keep original string if cleaning fails
+            }
+          }
+        }
+
         parts.push({
           functionCall: {
             name: fnCall.name,
-            args: typeof fnCall.arguments === 'string'
-              ? JSON.parse(fnCall.arguments)
-              : (fnCall.arguments || {})
+            args: parsedArgs
           }
         });
       }
@@ -213,4 +231,50 @@ export class OllamaLlm extends BaseLlm {
       req.end();
     });
   }
+
+  /**
+   * Helper to safely parse and auto-repair broken JSON from Qwen.
+   */
+  _repairAndParseJson(input, fallback = {}) {
+    if (!input || typeof input !== 'string') return fallback;
+    const trimmed = input.trim();
+    if (!trimmed) return fallback;
+
+    // 1. Direct parse attempt
+    try {
+      return JSON.parse(trimmed);
+    } catch {
+      // 2. Auto-repair regex pass
+      try {
+        const cleaned = this._cleanJsonString(trimmed);
+        return JSON.parse(cleaned);
+      } catch {
+        // 3. Fallback: if it starts with { or [, try wrapping or extracting
+        const match = trimmed.match(/\{[\s\S]*\}|\[[\s\S]*\]/);
+        if (match) {
+          try {
+            return JSON.parse(this._cleanJsonString(match[0]));
+          } catch {
+            return fallback;
+          }
+        }
+        return fallback;
+      }
+    }
+  }
+
+  /**
+   * Cleans up common LLM JSON syntax artifacts (stray quotes, unescaped quotes, trailing commas).
+   */
+  _cleanJsonString(str) {
+    if (typeof str !== 'string') return str;
+    return str
+      .replace(/\]\s*\\*"\s*,/g, '],')           // Fix: ]", -> ],
+      .replace(/\]\s*\\*"\s*\}/g, ']}')           // Fix: ]"} -> ]}
+      .replace(/\}\s*\\*"\s*,/g, '},')           // Fix: }", -> },
+      .replace(/,\s*([\}\]])/g, '$1')            // Fix trailing commas: ,} -> } or ,] -> ]
+      .replace(/(['"])?([a-zA-Z0-9_$]+)(['"])?\s*:/g, '"$2":') // Quote unquoted keys
+      .replace(/:\s*'([^']*)'/g, ':"$1"');       // Single quotes values to double quotes
+  }
 }
+

@@ -6,11 +6,15 @@
   "type": "module",
   "scripts": {
     "start": "node server.js",
-    "dev": "node --watch server.js"
+    "dev": "node --watch server.js",
+    "sync": "node src/syncQdrant.js",
+    "sync:full": "node src/syncQdrant.js --full",
+    "sync:status": "node src/syncQdrant.js --status"
   },
   "dependencies": {
     "@google/adk": "^1.6.0",
     "@google/genai": "^2.16.0",
+    "@qdrant/js-client-rest": "^1.19.0",
     "cors": "^2.8.5",
     "dotenv": "^16.4.7",
     "express": "^4.21.2",

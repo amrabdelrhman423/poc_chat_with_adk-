@@ -57,6 +57,87 @@ function getAIClient(customApiKey) {
 }
 
 /**
+ * Formats tool execution result into a rich, complete presentation string for the chat.
+ */
+export function formatToolExecutionSummary(result) {
+  if (!result) return 'Completed.';
+  if (result.status === 'error') return result.message || 'Tool execution failed.';
+
+  const sections = [];
+
+  // 1. If result has formattedDetails (from search_doctors, search_hospitals)
+  if (result.formattedDetails && typeof result.formattedDetails === 'string' && result.formattedDetails.trim()) {
+    sections.push(result.formattedDetails.trim());
+  }
+  // 2. If result has context (from RAG semantic/hybrid search)
+  else if (result.context && typeof result.context === 'string' && result.context.trim() && !result.context.includes('No relevant records')) {
+    sections.push(result.context.trim());
+  }
+  // 3. If result has results array (from query_parse_db)
+  else if (result.results && Array.isArray(result.results) && result.results.length > 0) {
+    const list = result.results.map((r, i) => {
+      const name = r.fullname || r.fullnameAr || r.nameEn || r.nameAr || r.detailsEn || r.objectId || `Record #${i + 1}`;
+      const details = [];
+      if (r.fullnameAr && r.fullname && r.fullnameAr !== r.fullname) details.push(`الاسم بالعربي: **${r.fullnameAr}**`);
+      if (r.title || r.positionAr || r.positionEn) details.push(`Title: ${r.positionEn || r.title || r.positionAr}`);
+      if (r.qualificationsEn || r.qualificationsAr) details.push(`Qualifications: ${r.qualificationsEn || r.qualificationsAr}`);
+      if (r.specialtyDetails?.nameEn || r.specialtyDetails?.nameAr) details.push(`Specialty: ${r.specialtyDetails.nameEn || r.specialtyDetails.nameAr}`);
+      if (r.hospitalDetails?.nameEn || r.hospitalDetails?.nameAr) details.push(`Hospital: ${r.hospitalDetails.nameEn || r.hospitalDetails.nameAr} (${r.hospitalDetails.addressEn || r.hospitalDetails.addressAr || ''})`);
+      if (r.doctorDetails?.fullname || r.doctorDetails?.fullnameAr) details.push(`Doctor: ${r.doctorDetails.fullname || r.doctorDetails.fullnameAr}`);
+      if (r.averageRating) details.push(`Rating: ⭐ ${r.averageRating}/5`);
+      if (r.yrsExp) details.push(`Experience: ${r.yrsExp} years`);
+      if (r.phonenumber) details.push(`Phone: 📞 ${r.phonenumber}`);
+      if (r.email) details.push(`Email: ✉️ ${r.email}`);
+      if (r.addressEn || r.addressAr) details.push(`Address: 📍 ${r.addressEn || r.addressAr}`);
+      if (r.price) details.push(`Price: 💰 ${r.price} ${r.currency || ''}`);
+      if (r.status) details.push(`Status: ${r.status}`);
+      if (r.bookingDate) details.push(`Date: 📅 ${new Date(r.bookingDate.iso || r.bookingDate).toLocaleDateString()}`);
+
+      return `### Record ${i + 1}: **${name}**\n${details.map(d => `- ${d}`).join('\n')}`;
+    }).join('\n\n');
+
+    sections.push(`Found ${result.results.length} record(s) in **${result.className || 'Database'}**:\n\n${list}`);
+  }
+  // 4. If result has results object (grouped by collection)
+  else if (result.results && typeof result.results === 'object' && !Array.isArray(result.results)) {
+    const parts = [];
+    for (const [col, hits] of Object.entries(result.results)) {
+      if (Array.isArray(hits) && hits.length > 0) {
+        parts.push(`\n### ${col.toUpperCase()} (${hits.length} items):`);
+        hits.forEach((h, idx) => {
+          const p = h.payload || h;
+          const score = h.score ? `[Score: ${(h.score * 100).toFixed(1)}%]` : '';
+          const name = p.fullname || p.fullnameAr || p.nameEn || p.nameAr || p.doctorName || `Item #${idx + 1}`;
+          const details = [];
+          if (p.positionEn || p.positionAr || p.doctorPosition) details.push(`Title: ${p.positionEn || p.positionAr || p.doctorPosition}`);
+          if (p.qualificationsEn || p.doctorQualifications) details.push(`Qualifications: ${p.qualificationsEn || p.doctorQualifications}`);
+          if (p.hospitalName || p.hospitalAddress) details.push(`Hospital: ${p.hospitalName || ''} (${p.hospitalAddress || ''})`);
+          if (p.specialtyName || p.specialtyNameAr) details.push(`Specialty: ${p.specialtyName || p.specialtyNameAr}`);
+          if (p.phonenumber || p.doctorPhone) details.push(`📞 Phone: ${p.phonenumber || p.doctorPhone}`);
+          if (p.email || p.doctorEmail) details.push(`✉️ Email: ${p.email || p.doctorEmail}`);
+          if (p.averageRating || p.doctorRating) details.push(`⭐ Rating: ${p.averageRating || p.doctorRating}/5`);
+          if (p.yrsExp || p.doctorYrsExp) details.push(`⏳ Experience: ${p.yrsExp || p.doctorYrsExp} yrs`);
+          parts.push(`- **${score} ${name}**\n  ${details.map(d => `* ${d}`).join('\n  ')}`);
+        });
+      }
+    }
+    if (parts.length > 0) {
+      sections.push(parts.join('\n\n'));
+    }
+  }
+
+  if (result.message && !sections.some(s => s.includes(result.message))) {
+    sections.unshift(result.message);
+  }
+
+  if (result.filename) {
+    sections.push(`📁 **File Saved:** \`workspace/${result.filename}\``);
+  }
+
+  return sections.join('\n\n') || result.message || 'Operation completed successfully.';
+}
+
+/**
  * Resolves the effective Gemini API key.
  */
 function resolveApiKey(customApiKey) {
@@ -200,43 +281,17 @@ export async function streamChatResponse(
         }
       }
 
-      // 3. Detect and stream tool responses
+      // 3. Detect and stream tool responses with full record presentation
       const responses = getFunctionResponses(event);
       if (responses && responses.length > 0) {
         for (const resp of responses) {
           const result = resp.response;
           if (result) {
             if (result.status === 'success') {
-              let detailedSummary = result.message || `Query completed for ${result.className || 'workspace'}.`;
-              if (result.results && Array.isArray(result.results) && result.results.length > 0) {
-                const recordsList = result.results.map((r, i) => {
-                  const name = r.fullname || r.fullnameAr || r.nameEn || r.nameAr || r.detailsEn || r.objectId || `Record #${i+1}`;
-                  const details = [];
-                  if (r.title || r.positionAr || r.positionEn) details.push(`Title: ${r.title || r.positionAr || r.positionEn}`);
-                  if (r.specialtyDetails?.nameEn || r.specialtyDetails?.nameAr) details.push(`Specialty: ${r.specialtyDetails.nameEn || r.specialtyDetails.nameAr}`);
-                  if (r.hospitalDetails?.nameEn || r.hospitalDetails?.nameAr) details.push(`Hospital: ${r.hospitalDetails.nameEn || r.hospitalDetails.nameAr}`);
-                  if (r.doctorDetails?.fullname || r.doctorDetails?.fullnameAr) details.push(`Doctor: ${r.doctorDetails.fullname || r.doctorDetails.fullnameAr}`);
-                  if (r.averageRating) details.push(`Rating: ⭐${r.averageRating}/5`);
-                  if (r.yrsExp) details.push(`Experience: ${r.yrsExp} yrs`);
-                  if (r.price) details.push(`Price: ${r.price} ${r.currency || ''}`);
-                  if (r.status) details.push(`Status: ${r.status}`);
-                  if (r.bookingDate) details.push(`Date: ${new Date(r.bookingDate.iso || r.bookingDate).toLocaleDateString()}`);
-                  if (r.phonenumber) details.push(`Phone: ${r.phonenumber}`);
-
-                  return `  ${i + 1}. **${name}** ${details.length > 0 ? `(${details.join(' | ')})` : ''}`;
-                }).join('\n');
-
-                detailedSummary = `Found ${result.results.length} record(s) in **${result.className}**:\n${recordsList}`;
-              } else if (result.count !== undefined) {
-                detailedSummary += ` — **Total Count:** \`${result.count}\``;
-              } else if (result.filename) {
-                detailedSummary += ` — **File Saved:** \`workspace/${result.filename}\``;
-              }
-
-              lastToolSummary = detailedSummary;
-              onChunk(`> ✅ **Step ${stepIndex} Output:** ${lastToolSummary}\n\n`);
+              lastToolSummary = formatToolExecutionSummary(result);
+              onChunk(`\n> ✅ **Step ${stepIndex} Output:**\n${lastToolSummary}\n\n`);
             } else if (result.status === 'error') {
-              onChunk(`> ❌ **Step ${stepIndex} Error:** ${result.message}\n\n`);
+              onChunk(`\n> ❌ **Step ${stepIndex} Error:** ${result.message || 'Operation failed.'}\n\n`);
             }
           }
         }
@@ -244,7 +299,7 @@ export async function streamChatResponse(
     }
 
     if (!hasEmittedText && stepIndex > 0 && lastToolSummary) {
-      onChunk(`\n\n## 📋 Summary / ملخص النتائج\n${lastToolSummary}`);
+      onChunk(`\n\n## 📋 Summary / ملخص النتائج\n\n${lastToolSummary}`);
     }
   } catch (streamErr) {
     console.error('Error during Gemini ADK execution:', streamErr);

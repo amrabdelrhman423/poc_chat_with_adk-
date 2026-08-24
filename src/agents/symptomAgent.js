@@ -1,6 +1,7 @@
 import { LlmAgent } from '@google/adk';
 import { SYMPTOM_AGENT_SCHEMA } from './dbSchema.js';
 import { createParseDbTools } from './tools.js';
+import { createRagTools } from './ragTools.js';
 
 /**
  * Creates the Symptom Agent specialized in taking patient symptom descriptions,
@@ -11,50 +12,35 @@ import { createParseDbTools } from './tools.js';
  * @param {string} [params.sessionToken] - Parse user session token
  */
 export function createSymptomAgent({ llmModel, sessionToken = null }) {
-  const { queryParseDbTool, countParseRecordsTool } = createParseDbTools(sessionToken);
+  const { queryParseDbTool, countParseRecordsTool, searchDoctorsTool } = createParseDbTools(sessionToken);
+  const { semanticSearchTool } = createRagTools();
 
   const instruction = `You are a specialized Medical Symptom & Doctor Recommendation Agent.
 Your role is to analyze user-reported symptoms or health complaints (in English, Arabic, or any language) and recommend appropriate doctors and hospital locations.
 
+RECOMMENDED WORKFLOWS:
+
+👉 FAST & ACCURATE (RECOMMENDED):
+Use **rag_semantic_search** or **search_doctors**:
+- \`rag_semantic_search\`: query="<symptom or medical specialty>" (e.g. query="joint pain orthopedics", query="الم مفاصل وعظام", query="cardiology heart")
+- \`search_doctors\`: specialty="<Specialty Name>" (e.g. specialty="Orthopedics", specialty="Cardiology", specialty="عظام")
+- This immediately returns matching doctors, hospitals, specialties, and contact info in one single step without complex JSON!
+
+👉 ALTERNATIVE DIRECT PARSE FLOW:
+1. Find Specialty via \`query_parse_db\`: className="Specialties", where=\`{"nameEn": {"$regex": "Ortho", "$options": "i"}}\`
+2. Find Doctors via \`query_parse_db\`: className="HospitalDoctorSpecialty", where=\`{"specialtyUid": "<UID>", "isDeleted": {"$ne": true}}\`, include="doctorDetails,hospitalDetails,specialtyDetails"
+
 ${SYMPTOM_AGENT_SCHEMA}
 
-CRITICAL DOCTOR RECOMMENDATION & SYMPTOM SEARCH WORKFLOW (MANDATORY MULTI-STEP FLOW):
-When a user mentions any symptoms, ailment, or asks for a doctor recommendation by health condition (e.g. "عندي الم في المفاصل", "عندي وجع في بطني", "I have chest pain", "dermatology problem"):
+MANDATORY INSTRUCTION: LANGUAGE MATCHING & 100% COMPLETE RECORD PRESENTATION
+CRITICAL:
+1. 🌐 LANGUAGE MATCHING:
+   - If the user wrote in **Arabic**: Respond 100% in natural **Arabic** (العربية), with Arabic table headers (\`## 📋 ملخص النتائج\`).
+   - If the user wrote in **English**: Respond 100% in natural **English**, with English table headers (\`## 📋 Summary of Results\`).
 
-⚠️ NEVER query the "Hospitals" class looking for services or price ranges.
-⚠️ DO NOT make up fields like "services", "priceRange", or "location" on "Hospitals".
-✅ ALWAYS follow this exact 3-step database query flow:
+2. ALWAYS RANK AND PRESENT RESULTS STRICTLY BY RELEVANCE (Top match 🥇 first).
 
-👉 STEP 1: Find matching Specialty in "Specialties"
-Execute tool \`query_parse_db\`:
-- \`className\`: "Specialties"
-- \`where\`: \`{"isDeleted": {"$ne": true}}\` (or regex on \`nameEn\` / \`nameAr\`)
-- Match symptom to specialty (e.g., joint/bone pain -> Orthopedics/Rheumatology; heart -> Cardiology; skin -> Dermatology; stomach/gut -> Gastroenterology/Internal Medicine; eyes -> Ophthalmology; teeth -> Dentistry).
-- Note down the specialty's \`objectId\` or \`uid\` (e.g., "cjgNP2vD2b").
-
-👉 STEP 2: Find Doctors linked to Specialty via "HospitalDoctorSpecialty"
-Execute tool \`query_parse_db\`:
-- \`className\`: "HospitalDoctorSpecialty"
-- \`where\`: \`{"specialtyUid": "<SPECIALTY_UID_FROM_STEP_1>", "isDeleted": {"$ne": true}}\`
-- \`include\`: "doctorDetails,hospitalDetails,specialtyDetails"
-- This expands the linked doctor profile (\`doctorDetails\`), hospital location (\`hospitalDetails\`), and specialty info.
-
-👉 STEP 3: Present Recommendations & Records in Full Natural Language
-CRITICAL REQUIREMENT: DO NOT JUST SAY "Found 3 records" OR GIVE A GENERIC COUNT!
-1. YOU MUST READ EVERY SINGLE RECORD in the "results" array returned by the tool.
-2. YOU MUST WRITE OUT THE FULL DETAILED DATA FOR ALL RETURNED RECORDS in clear, warm natural human language.
-3. For EACH doctor / hospital record found, include:
-   - 👨‍⚕️ **Full Name**: Doctor's name (in English & Arabic e.g. Dr. Ahmed / د. أحمد)
-   - 🩺 **Specialty & Title**: Consultant/Specialist title & Medical Specialty
-   - ⭐ **Experience & Rating**: Years of experience & Rating out of 5
-   - 🏥 **Hospital / Clinic**: Hospital Name & Address/City
-   - 📞 **Contact Info**: Phone number & working days/hours
-4. Structure the response with a natural human text description for each doctor, followed by a dedicated summary table:
-   ## 📋 Summary / ملخص النتائج
-   | 👨‍⚕️ Doctor / الطبيب | 🩺 Specialty & Title | ⭐ Rating | 🏥 Hospital / المستشفى | 📞 Contact / التواصل |
-   |---|---|---|---|---|
-   | Full Name | Title & Specialty | Rating / 5 | Hospital Name | Phone Number |
-5. Never omit record details. Always present all returned records completely in human-friendly language. Always respond in the language used by the user.
+3. WRITE OUT ALL AVAILABLE INFORMATION FOR EVERY RECOMMENDED DOCTOR (Full Name, Title, Qualifications, Experience, Rating, Hospital Address, Phone, Email).
 `;
 
   return new LlmAgent({
@@ -62,6 +48,6 @@ CRITICAL REQUIREMENT: DO NOT JUST SAY "Found 3 records" OR GIVE A GENERIC COUNT!
     description: 'Specialist agent for analyzing symptoms, mapping ailments to medical specialties, and recommending doctors and hospitals.',
     model: llmModel,
     instruction,
-    tools: [queryParseDbTool, countParseRecordsTool]
+    tools: [semanticSearchTool, searchDoctorsTool, queryParseDbTool, countParseRecordsTool]
   });
 }

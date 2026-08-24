@@ -7,6 +7,8 @@ import { MODEL_CATALOG, streamChatResponse, generateImageWithImagen } from './sr
 import { getOllamaModels, streamOllamaChatResponse } from './src/ollamaService.js';
 import { executeListFiles, executeReadFile, WORKSPACE_DIR } from './src/agentTools.js';
 import { loginParseUser, verifyParseSessionToken } from './src/parseService.js';
+import { ensureCollections, checkQdrantConnection, getAllCollectionsStatus } from './src/qdrantService.js';
+import { syncAllCollections, getRagStatus } from './src/ragService.js';
 
 dotenv.config();
 
@@ -168,14 +170,55 @@ app.get('/api/workspace/file/*', (req, res) => {
   }
 });
 
+// 6. RAG (Retrieval-Augmented Generation) API Endpoints
+
+// Trigger a full data sync from Parse Server → Qdrant vector database
+app.post('/api/rag/sync', async (req, res) => {
+  const { fullResync = false } = req.body || {};
+  try {
+    console.log(`\n🔄 RAG sync triggered via API (fullResync=${fullResync})...`);
+    const results = await syncAllCollections(fullResync);
+    res.json({ success: true, ...results });
+  } catch (err) {
+    console.error('RAG sync failed:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Get RAG system status (collection point counts, connection status)
+app.get('/api/rag/status', async (req, res) => {
+  try {
+    const connection = await checkQdrantConnection();
+    const status = connection.connected ? await getRagStatus() : { status: 'disconnected' };
+    res.json({ success: true, qdrant: connection, ...status });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 // Serve frontend for all unmatched routes
 app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
 // Start Express server
-app.listen(PORT, '0.0.0.0', () => {
+app.listen(PORT, '0.0.0.0', async () => {
   console.log(`=======================================================`);
   console.log(`🚀 Gemini & Ollama Qwen Chat App live at http://localhost:${PORT}`);
   console.log(`=======================================================`);
+
+  // Initialize Qdrant collections on startup (non-blocking)
+  try {
+    const qdrantConn = await checkQdrantConnection();
+    if (qdrantConn.connected) {
+      console.log('📦 Qdrant connected — ensuring RAG collections...');
+      await ensureCollections();
+      const status = await getRagStatus();
+      console.log(`✅ RAG ready! ${status.totalPoints} total vectors across ${Object.keys(status.collections).length} collections.`);
+    } else {
+      console.warn('⚠️ Qdrant not reachable — RAG features disabled. Start Qdrant with: docker run -d -p 6333:6333 qdrant/qdrant');
+    }
+  } catch (err) {
+    console.warn('⚠️ Qdrant initialization skipped:', err.message);
+  }
 });

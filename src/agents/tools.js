@@ -5,6 +5,37 @@ import { queryParseClass, countParseClass, aggregateParseData } from '../parseSe
 /**
  * File management tools
  */
+/**
+ * Safely parse JSON strings produced by LLMs with automatic syntax error recovery.
+ */
+function safeParseJson(input, fallback = {}) {
+  if (!input) return fallback;
+  if (typeof input === 'object') return input;
+  if (typeof input !== 'string') return fallback;
+  const trimmed = input.trim();
+  if (!trimmed) return fallback;
+
+  // 1. First standard attempt
+  try {
+    return JSON.parse(trimmed);
+  } catch (e) {
+    // 2. Attempt automatic repairs for common LLM hallucinations in JSON
+    try {
+      let cleaned = trimmed
+        .replace(/\]\s*\\*"\s*,/g, '],')          // Fix: ]", -> ],
+        .replace(/\]\s*\\*"\s*\}/g, ']}')          // Fix: ]"} -> ]}
+        .replace(/\}\s*\\*"\s*,/g, '},')          // Fix: }", -> },
+        .replace(/,\s*([\}\]])/g, '$1')           // Fix trailing commas: ,} -> } or ,] -> ]
+        .replace(/(['"])?([a-zA-Z0-9_$]+)(['"])?\s*:/g, '"$2":') // Ensure keys are double-quoted
+        .replace(/:\s*'([^']*)'/g, ':"$1"');      // Single quotes to double quotes
+
+      return JSON.parse(cleaned);
+    } catch (repairErr) {
+      throw new Error(`Invalid JSON parameter (${e.message}): "${input.substring(0, 120)}"`);
+    }
+  }
+}
+
 export const writeFileTool = new FunctionTool({
   name: 'write_file',
   description: 'Create or overwrite a file in the workspace directory with the given content.',
@@ -101,16 +132,7 @@ export function createParseDbTools(sessionToken = null) {
     },
     execute: async ({ className, where, limit = 20, skip = 0, order, include, keys }) => {
       try {
-        let parsedWhere = {};
-        if (where) {
-          if (typeof where === 'object') {
-            parsedWhere = where;
-          } else if (typeof where === 'string' && where.trim()) {
-            try { parsedWhere = JSON.parse(where); } catch (e) {
-              return { status: 'error', message: `Invalid 'where' JSON: ${e.message}.` };
-            }
-          }
-        }
+        const parsedWhere = safeParseJson(where, {});
         const safeLimit = Math.min(Math.max(limit || 20, 1), 100);
         const result = await queryParseClass(className, {
           where: parsedWhere,
@@ -148,16 +170,7 @@ export function createParseDbTools(sessionToken = null) {
     },
     execute: async ({ className, where }) => {
       try {
-        let parsedWhere = {};
-        if (where) {
-          if (typeof where === 'object') {
-            parsedWhere = where;
-          } else if (typeof where === 'string' && where.trim()) {
-            try { parsedWhere = JSON.parse(where); } catch (e) {
-              return { status: 'error', message: `Invalid 'where' JSON: ${e.message}` };
-            }
-          }
-        }
+        const parsedWhere = safeParseJson(where, {});
         const result = await countParseClass(className, parsedWhere, sessionToken);
         return {
           status: 'success',
@@ -184,15 +197,7 @@ export function createParseDbTools(sessionToken = null) {
     },
     execute: async ({ className, pipeline }) => {
       try {
-        let parsedPipeline = [];
-        if (pipeline) {
-          if (Array.isArray(pipeline)) parsedPipeline = pipeline;
-          else if (typeof pipeline === 'string' && pipeline.trim()) {
-            try { parsedPipeline = JSON.parse(pipeline); } catch (e) {
-              return { status: 'error', message: `Invalid pipeline JSON: ${e.message}` };
-            }
-          }
-        }
+        const parsedPipeline = safeParseJson(pipeline, []);
         const result = await aggregateParseData(className, parsedPipeline, sessionToken);
         return {
           status: 'success',
@@ -206,5 +211,226 @@ export function createParseDbTools(sessionToken = null) {
     }
   });
 
-  return { queryParseDbTool, countParseRecordsTool, aggregateParseDataTool };
+  /**
+   * Simplified, foolproof doctor search tool.
+   * Requires only simple string/number parameters — no complex JSON required from the LLM.
+   */
+  const searchDoctorsTool = new FunctionTool({
+    name: 'search_doctors',
+    description: 'Search for doctors using simple parameters (name, specialty, gender, minimum rating, experience). Foolproof and does not require complex JSON.',
+    parameters: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: 'Doctor name in Arabic or English (e.g. "منى ابوالغار", "Mona", "Ahmed", "طارق")' },
+        specialty: { type: 'string', description: 'Medical specialty name in Arabic or English (e.g. "عظام", "Cardiology", "Dentistry")' },
+        gender: { type: 'string', enum: ['male', 'female'], description: 'Doctor gender filter' },
+        minRating: { type: 'number', description: 'Minimum average rating out of 5 (e.g. 4.0)' },
+        minExperience: { type: 'number', description: 'Minimum years of experience' },
+        limit: { type: 'number', description: 'Maximum number of results to return (default: 10)' }
+      }
+    },
+    execute: async ({ name, specialty, gender, minRating, minExperience, limit = 10 }) => {
+      try {
+        const safeLimit = Math.min(Math.max(limit || 10, 1), 50);
+        const whereClause = { isDeleted: { $ne: true } };
+
+        if (gender) {
+          whereClause.gender = gender;
+        }
+        if (typeof minRating === 'number' && minRating > 0) {
+          whereClause.averageRating = { $gte: minRating };
+        }
+        if (typeof minExperience === 'number' && minExperience > 0) {
+          whereClause.yrsExp = { $gte: minExperience };
+        }
+
+        // Clean up common title prefixes from doctor name (e.g. "دكتور جمال" -> "جمال")
+        let cleanName = '';
+        if (name && typeof name === 'string' && name.trim()) {
+          cleanName = name.trim().replace(/^(دكتور|دكتورة|د\.|د\/|طبيب|dr\.|dr|doctor)\s+/i, '').trim();
+          whereClause.$or = [
+            { fullname: { $regex: cleanName, $options: 'i' } },
+            { fullnameAr: { $regex: cleanName, $options: 'i' } },
+            { positionEn: { $regex: cleanName, $options: 'i' } },
+            { positionAr: { $regex: cleanName, $options: 'i' } }
+          ];
+        }
+
+        let result = await queryParseClass('Doctors', {
+          where: whereClause,
+          limit: safeLimit,
+          order: '-averageRating,-yrsExp',
+          sessionToken
+        });
+
+        // 🧠 AUTOMATIC RAG FALLBACK: If Parse exact regex returned 0 results, query Qdrant vector database!
+        if ((!result.results || result.results.length === 0) && (cleanName || specialty)) {
+          const searchQuery = cleanName || specialty || name;
+          try {
+            const { semanticSearch } = await import('../ragService.js');
+            const vectorHits = await semanticSearch(searchQuery, ['doctors', 'hospital_doctor_specialty'], safeLimit);
+            const foundDoctors = [];
+            const seenIds = new Set();
+
+            if (vectorHits.doctors && vectorHits.doctors.length > 0) {
+              for (const hit of vectorHits.doctors) {
+                if (hit.payload && !seenIds.has(hit.payload.objectId)) {
+                  seenIds.add(hit.payload.objectId);
+                  foundDoctors.push({ ...hit.payload, relevanceScore: hit.score });
+                }
+              }
+            }
+
+            if (vectorHits.hospital_doctor_specialty && vectorHits.hospital_doctor_specialty.length > 0) {
+              for (const hit of vectorHits.hospital_doctor_specialty) {
+                const p = hit.payload;
+                if (p && !seenIds.has(p.doctorUid || p.objectId)) {
+                  seenIds.add(p.doctorUid || p.objectId);
+                  foundDoctors.push({
+                    fullname: p.doctorName,
+                    fullnameAr: p.doctorNameAr,
+                    positionEn: p.doctorPosition,
+                    positionAr: p.doctorPositionAr,
+                    qualificationsEn: p.doctorQualifications,
+                    averageRating: p.doctorRating,
+                    yrsExp: p.doctorYrsExp,
+                    gender: p.doctorGender,
+                    phonenumber: p.doctorPhone,
+                    email: p.doctorEmail,
+                    hospitalName: p.hospitalName,
+                    hospitalAddress: p.hospitalAddress,
+                    specialtyName: p.specialtyName,
+                    relevanceScore: hit.score
+                  });
+                }
+              }
+            }
+
+            if (foundDoctors.length > 0) {
+              result.results = foundDoctors;
+              result.count = foundDoctors.length;
+            }
+          } catch (ragErr) {
+            console.warn('RAG fallback in search_doctors failed:', ragErr.message);
+          }
+        }
+
+        // Pre-format detailed readable output for every doctor to guarantee complete presentation
+        const formattedList = result.results.map((doc, idx) => {
+          const lines = [
+            `### 👨‍⚕️ Doctor ${idx + 1}: **${doc.fullname || 'Unknown'}** ${doc.fullnameAr ? `(${doc.fullnameAr})` : ''}`,
+            `- 🩺 **Title / Position**: ${doc.positionEn || doc.title || 'Doctor'} ${doc.positionAr ? `/ ${doc.positionAr}` : ''}`,
+            doc.specialtyName ? `- 🩺 **Specialty**: ${doc.specialtyName}` : null,
+            doc.hospitalName ? `- 🏥 **Hospital**: ${doc.hospitalName} ${doc.hospitalAddress ? `(${doc.hospitalAddress})` : ''}` : null,
+            doc.qualificationsEn ? `- 🎓 **Qualifications (EN)**: ${doc.qualificationsEn}` : null,
+            doc.qualificationsAr ? `- 🎓 **المؤهلات (AR)**: ${doc.qualificationsAr}` : null,
+            doc.yrsExp ? `- ⏳ **Experience**: ${doc.yrsExp} years (${doc.yrsExp} سنة خبرة)` : null,
+            doc.averageRating ? `- ⭐ **Rating**: ${doc.averageRating} / 5 (${doc.averageRating} من 5)` : null,
+            doc.gender ? `- 👤 **Gender**: ${doc.gender}` : null,
+            doc.phonenumber ? `- 📞 **Phone / الهاتف**: ${doc.phonenumber}` : null,
+            doc.email ? `- ✉️ **Email / البريد الإلكتروني**: ${doc.email}` : null,
+            doc.relevanceScore ? `- 🎯 **Match Score**: ${(doc.relevanceScore * 100).toFixed(1)}%` : null
+          ].filter(Boolean);
+          return lines.join('\n');
+        }).join('\n\n');
+
+        return {
+          status: 'success',
+          count: result.results.length,
+          totalAvailable: result.count,
+          formattedDetails: formattedList || 'No doctors found matching criteria.',
+          doctors: result.results,
+          message: `Found ${result.results.length} doctor(s). Write out ALL the details above in your response!`
+        };
+      } catch (err) {
+        return { status: 'error', message: `Doctor search failed: ${err.message}` };
+      }
+    }
+  });
+
+  /**
+   * Simplified, foolproof hospital search tool.
+   */
+  const searchHospitalsTool = new FunctionTool({
+    name: 'search_hospitals',
+    description: 'Search for hospitals, clinics, or medical centers using simple string parameters.',
+    parameters: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: 'Hospital or clinic name in Arabic or English (e.g. "السلام", "Al Salam", "Cleopatra")' },
+        hospitalType: { type: 'string', description: 'Type of facility (e.g. "Hospital", "Clinic", "Center")' },
+        city: { type: 'string', description: 'City or area name (e.g. "Cairo", "Giza", "القاهرة")' },
+        limit: { type: 'number', description: 'Maximum number of results to return (default: 10)' }
+      }
+    },
+    execute: async ({ name, hospitalType, city, limit = 10 }) => {
+      try {
+        const safeLimit = Math.min(Math.max(limit || 10, 1), 50);
+        const whereClause = { isDeleted: { $ne: true } };
+
+        if (hospitalType) {
+          whereClause.hospitalType = { $regex: hospitalType.trim(), $options: 'i' };
+        }
+
+        if (name && typeof name === 'string' && name.trim()) {
+          const cleanName = name.trim();
+          whereClause.$or = [
+            { nameEn: { $regex: cleanName, $options: 'i' } },
+            { nameAr: { $regex: cleanName, $options: 'i' } },
+            { descEn: { $regex: cleanName, $options: 'i' } },
+            { descAr: { $regex: cleanName, $options: 'i' } }
+          ];
+        }
+
+        if (city && typeof city === 'string' && city.trim()) {
+          const cleanCity = city.trim();
+          if (!whereClause.$or) {
+            whereClause.$or = [];
+          }
+          whereClause.$or.push(
+            { addressEn: { $regex: cleanCity, $options: 'i' } },
+            { addressAr: { $regex: cleanCity, $options: 'i' } }
+          );
+        }
+
+        const result = await queryParseClass('Hospitals', {
+          where: whereClause,
+          limit: safeLimit,
+          sessionToken
+        });
+
+        // Pre-format detailed readable output for every hospital
+        const formattedList = result.results.map((hosp, idx) => {
+          const lines = [
+            `### 🏥 Hospital ${idx + 1}: **${hosp.nameEn || 'Unknown'}** ${hosp.nameAr ? `(${hosp.nameAr})` : ''}`,
+            hosp.hospitalType ? `- 🏷️ **Type**: ${hosp.hospitalType}` : null,
+            (hosp.addressEn || hosp.addressAr) ? `- 📍 **Address / العنوان**: ${hosp.addressEn || ''} ${hosp.addressAr ? `/ ${hosp.addressAr}` : ''}` : null,
+            (hosp.descEn || hosp.descAr) ? `- 📝 **Description**: ${hosp.descEn || hosp.descAr}` : null,
+            hosp.workingDaysHrs ? `- 🕒 **Working Hours**: ${hosp.workingDaysHrs}` : null
+          ].filter(Boolean);
+          return lines.join('\n');
+        }).join('\n\n');
+
+        return {
+          status: 'success',
+          count: result.results.length,
+          totalAvailable: result.count,
+          formattedDetails: formattedList || 'No hospitals found matching criteria.',
+          hospitals: result.results,
+          message: `Found ${result.results.length} hospital(s). Write out ALL the details above in your response!`
+        };
+      } catch (err) {
+        return { status: 'error', message: `Hospital search failed: ${err.message}` };
+      }
+    }
+  });
+
+  return {
+    queryParseDbTool,
+    countParseRecordsTool,
+    aggregateParseDataTool,
+    searchDoctorsTool,
+    searchHospitalsTool
+  };
 }
+
