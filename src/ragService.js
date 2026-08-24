@@ -415,13 +415,16 @@ export function buildContext(searchResults) {
   // Sort strictly by relevance score descending (highest score first)
   allHits.sort((a, b) => (b.score || 0) - (a.score || 0));
 
-  const contextParts = [];
-  contextParts.push(`\n## 🎯 Top Ranked Search Results (Sorted by Highest Score)\n`);
+  // Focus on the #1 Top Match (and at most top 2 if score is very close)
+  const topHits = allHits.slice(0, 2);
 
-  allHits.forEach((hit, idx) => {
+  const contextParts = [];
+  contextParts.push(`\n## 🎯 TOP MATCH RESULT (Highest Relevance Score)\n`);
+
+  topHits.forEach((hit, idx) => {
     const p = hit.payload || {};
     const scorePct = ((hit.score || 0) * 100).toFixed(1);
-    const rankBadge = idx === 0 ? '🥇 **[TOP MATCH / النتيجة الأولى' : idx === 1 ? '🥈 **[Rank #2' : idx === 2 ? '🥉 **[Rank #3' : `**[Rank #${idx + 1}`;
+    const rankBadge = idx === 0 ? '🥇 **[TOP MATCH / النتيجة الأقرب' : '🥈 **[Alternative Match';
 
     let record = `${rankBadge} — Score: ${scorePct}% | Collection: ${hit.collection}]**\n`;
 

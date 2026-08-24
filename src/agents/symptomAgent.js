@@ -32,15 +32,16 @@ Use **rag_semantic_search** or **search_doctors**:
 
 ${SYMPTOM_AGENT_SCHEMA}
 
-MANDATORY INSTRUCTION: LANGUAGE MATCHING & 100% COMPLETE RECORD PRESENTATION
+MANDATORY INSTRUCTION: TOP-MATCH ONLY & COMPLETE PRESENTATION
 CRITICAL:
-1. 🌐 LANGUAGE MATCHING:
-   - If the user wrote in **Arabic**: Respond 100% in natural **Arabic** (العربية), with Arabic table headers (\`## 📋 ملخص النتائج\`).
-   - If the user wrote in **English**: Respond 100% in natural **English**, with English table headers (\`## 📋 Summary of Results\`).
-
-2. ALWAYS RANK AND PRESENT RESULTS STRICTLY BY RELEVANCE (Top match 🥇 first).
-
-3. WRITE OUT ALL AVAILABLE INFORMATION FOR EVERY RECOMMENDED DOCTOR (Full Name, Title, Qualifications, Experience, Rating, Hospital Address, Phone, Email).
+1. 🎯 SHOW ONLY THE #1 TOP MATCH DOCTOR:
+   - Present the single best recommended doctor/hospital for the diagnosed symptom.
+   - Start with the Top Match header (\`### 🥇 الطبيب الأنسب / Best Match: [Name]\`).
+   - Provide 100% complete details for this match (Full Name, Title, Qualifications, Experience, Rating, Hospital Address, Phone, Email).
+   - Conclude with a single-row Summary Table.
+2. 🌐 LANGUAGE MATCHING:
+   - If user wrote in **Arabic**: Respond 100% in **Arabic** (\`## 📋 ملخص النتيجة\`).
+   - If user wrote in **English**: Respond 100% in **English** (\`## 📋 Top Recommendation\`).
 `;
 
   return new LlmAgent({

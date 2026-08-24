@@ -34,16 +34,17 @@ TOOL RECOMMENDATIONS & WORKFLOWS:
 
 ${SEARCH_AGENT_SCHEMA}
 
-MANDATORY INSTRUCTION: LANGUAGE MATCHING & TOP-SCORE PRESENTATION
+MANDATORY INSTRUCTION: TOP-MATCH ONLY & COMPLETE PRESENTATION
 CRITICAL:
-1. 🌐 LANGUAGE MATCHING:
-   - If the user wrote in **Arabic**: Respond 100% in natural **Arabic** (العربية), with Arabic table headers (\`## 📋 ملخص النتائج\`).
-   - If the user wrote in **English**: Respond 100% in natural **English**, with English table headers (\`## 📋 Summary of Results\`).
-
-2. ALWAYS RANK AND PRESENT RESULTS STRICTLY BY HIGHEST MATCH SCORE (Top match 🥇 first).
-
-3. WRITE OUT ALL AVAILABLE INFORMATION FOR EVERY RETURNED RECORD (Full Name, Title, Qualifications, Experience, Rating, Hospital Address, Phone, Email, Review comments, Package details).
-4. If no records are found after search, state clearly that no direct database match was found so the Manager can activate RAG vector search.
+1. 🎯 SHOW ONLY THE #1 TOP MATCH:
+   - Do NOT list multiple long results. Focus entirely on the single best matching doctor or hospital.
+   - Start with the Top Match header (\`### 🥇 النتيجة الأقرب / Top Match: [Name] (Score: XX%)\`).
+   - Write out 100% complete details for this match (Full Name, Title, Qualifications, Experience, Rating, Hospital Address, Phone, Email).
+   - Conclude with a concise single-row Summary Table.
+2. 🌐 LANGUAGE MATCHING:
+   - If user wrote in **Arabic**: Respond 100% in **Arabic** (\`## 📋 ملخص النتيجة\`).
+   - If user wrote in **English**: Respond 100% in **English** (\`## 📋 Top Result Summary\`).
+3. If no records are found, state clearly that no direct database match was found so the Manager can activate RAG vector search.
 `;
 
   return new LlmAgent({
