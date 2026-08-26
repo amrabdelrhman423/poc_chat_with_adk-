@@ -256,12 +256,103 @@ export function createParseDbTools(sessionToken = null) {
           ];
         }
 
-        let result = await queryParseClass('Doctors', {
-          where: whereClause,
-          limit: safeLimit,
-          order: '-averageRating,-yrsExp',
-          sessionToken
-        });
+        let result = { results: [], count: 0 };
+
+        // 1. If specialty is specified, resolve it via Specialties + HospitalDoctorSpecialty
+        if (specialty && typeof specialty === 'string' && specialty.trim()) {
+          const cleanSpecialty = specialty.trim();
+          const specResult = await queryParseClass('Specialties', {
+            where: {
+              isDeleted: { $ne: true },
+              $or: [
+                { nameEn: { $regex: cleanSpecialty, $options: 'i' } },
+                { nameAr: { $regex: cleanSpecialty, $options: 'i' } }
+              ]
+            },
+            limit: 10,
+            sessionToken
+          });
+
+          if (specResult.results && specResult.results.length > 0) {
+            const specUids = specResult.results.map(s => s.objectId);
+            const hdsResult = await queryParseClass('HospitalDoctorSpecialty', {
+              where: {
+                isDeleted: { $ne: true },
+                specialtyUid: specUids.length === 1 ? specUids[0] : { $in: specUids }
+              },
+              limit: safeLimit * 5,
+              include: 'doctorDetails,hospitalDetails,specialtyDetails',
+              sessionToken
+            });
+
+            if (hdsResult.results && hdsResult.results.length > 0) {
+              const seenDocIds = new Set();
+              const matchedDoctors = [];
+
+              for (const item of hdsResult.results) {
+                const doc = item.doctorDetails;
+                if (!doc || doc.isDeleted) continue;
+
+                const docKey = doc.objectId || item.doctorUid;
+                if (seenDocIds.has(docKey)) continue;
+
+                // Apply gender filter
+                if (gender && doc.gender !== gender) continue;
+
+                // Apply minRating filter
+                if (typeof minRating === 'number' && minRating > 0 && (doc.averageRating || 0) < minRating) continue;
+
+                // Apply minExperience filter
+                if (typeof minExperience === 'number' && minExperience > 0 && (doc.yrsExp || 0) < minExperience) continue;
+
+                // Apply name / keyword filter if given
+                if (cleanName) {
+                  const nameRegex = new RegExp(cleanName, 'i');
+                  const matchesName = nameRegex.test(doc.fullname || '') ||
+                                      nameRegex.test(doc.fullnameAr || '') ||
+                                      nameRegex.test(doc.positionEn || '') ||
+                                      nameRegex.test(doc.positionAr || '');
+                  if (!matchesName) continue;
+                }
+
+                seenDocIds.add(docKey);
+
+                const specName = item.specialtyDetails
+                  ? (item.specialtyDetails.nameAr ? `${item.specialtyDetails.nameEn} (${item.specialtyDetails.nameAr})` : item.specialtyDetails.nameEn)
+                  : cleanSpecialty;
+
+                const hospName = item.hospitalDetails
+                  ? (item.hospitalDetails.nameEn || item.hospitalDetails.nameAr)
+                  : '';
+
+                const hospAddr = item.hospitalDetails
+                  ? (item.hospitalDetails.addressEn || item.hospitalDetails.addressAr)
+                  : '';
+
+                matchedDoctors.push({
+                  ...doc,
+                  specialtyName: specName,
+                  hospitalName: hospName,
+                  hospitalAddress: hospAddr
+                });
+              }
+
+              // Sort by rating desc, yrsExp desc
+              matchedDoctors.sort((a, b) => (b.averageRating || 0) - (a.averageRating || 0) || (b.yrsExp || 0) - (a.yrsExp || 0));
+
+              result.results = matchedDoctors.slice(0, safeLimit);
+              result.count = matchedDoctors.length;
+            }
+          }
+        } else {
+          // No specialty specified: query Doctors collection directly
+          result = await queryParseClass('Doctors', {
+            where: whereClause,
+            limit: safeLimit,
+            order: '-averageRating,-yrsExp',
+            sessionToken
+          });
+        }
 
         // 🧠 AUTOMATIC RAG FALLBACK: If Parse exact regex returned 0 results, query Qdrant vector database!
         if ((!result.results || result.results.length === 0) && (cleanName || specialty)) {
